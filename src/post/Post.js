@@ -72,6 +72,13 @@ export class Post {
 			damage: [ 'f32', 0 ],
 			// speed lines strength (0..1)
 			speed: [ 'f32', 0 ],
+			// chromatic aberration (0..1)
+			chroma: [ 'f32', 0 ],
+			// light shafts: strength, and the sun on screen ( uv, visibility, _ )
+			rays: [ 'f32', 0.7 ],
+			// water on the lens (0..1): after surfacing or flying out of a cloud
+			droplets: [ 'f32', 0 ],
+			sunScreen: [ 'vec4f', [ 0.5, 0.5, 0, 0 ] ],
 		}, { label: 'post' } );
 		this.params = this.uniforms.fields;
 
@@ -157,6 +164,14 @@ ${ clouds ? /* wgsl */`
 		let cl = cloudsComposite( dir, in.uv, dist );
 		c = c * cl.a + cl.rgb;
 	}` : '' }
+	// under the sea: the water swallows red first, then everything, with a shimmer of caustics
+	if ( frame.cameraPos.y < frame.seaLevel - 0.05 ) {
+		let dd = min( dist, 300.0 );
+		let T = exp( - vec3f( 0.42, 0.075, 0.035 ) * dd * 0.6 );
+		let waterCol = frame.skyIrradiance * vec3f( 0.03, 0.14, 0.16 ) + frame.sunColor * vec3f( 0.002, 0.014, 0.016 );
+		let shimmer = 1.0 + 0.25 * sin( dir.x * 40.0 + frame.time * 2.0 ) * sin( dir.z * 37.0 - frame.time * 1.7 ) * max( dir.y, 0.0 );
+		c = ( c * T + waterCol * ( 1.0 - T ) ) * shimmer;
+	}
 	// inside a cloud: soft white-out toward the ambient cloud colour
 	let inCloud = post.cloudFog;
 	if ( inCloud > 0.001 ) {
@@ -170,6 +185,7 @@ ${ clouds ? /* wgsl */`
 		} );
 
 		this._buildBloom();
+		this._buildRays();
 		this._buildMeter();
 		this._buildFinal();
 
@@ -238,6 +254,54 @@ fn fragment( in: FSIn ) -> vec4f {
 		];
 		this.bloomTex = U[ 0 ];
 		this.meterRT = D[ 3 ];
+
+	}
+
+	// light shafts: a radial blur toward the sun of the bright sky around it (quarter resolution), so
+	// the sun streams through gaps in the clouds and around anything in front of it
+	_buildRays() {
+
+		this.raysRT = new RenderTarget( 1, 1, { colors: [ 'rgba16float' ], label: 'rays' } );
+		this._raysPass = new FullscreenPass( {
+			label: 'light shafts', colorFormats: [ 'rgba16float' ],
+			bindings: {
+				post: { uniform: this.uniforms },
+				rColor: { texture: () => this.taau.texture },
+				rDepth: { texture: () => this.finalDepth },
+				rExposure: { storage: this.exposure, access: 'read' },
+			},
+			code: /* wgsl */`
+fn rSample( uv: vec2f ) -> vec3f {
+	let ds = vec2f( textureDimensions( rDepth ) );
+	let d = textureLoad( rDepth, vec2i( clamp( uv, vec2f( 0.0 ), vec2f( 0.999 ) ) * ds ), 0 );
+	if ( d > 0.0 ) { return vec3f( 0.0 ); }
+	let c = textureSampleLevel( rColor, smpLinearClamp, uv, 0.0 ).rgb;
+	// only what is bright after exposure: the sun, its aureole, sunlit cloud edges
+	let l = luminance( c ) * rExposure[ 0 ];
+	return c * smoothstep( 1.1, 4.0, l );
+}
+fn fragment( in: FSIn ) -> vec4f {
+	let ss = post.sunScreen;
+	if ( ss.z <= 0.001 ) { return vec4f( 0.0 ); }
+	let uv = in.uv;
+	let delta = ( ss.xy - uv );
+	let n = 36;
+	let stepV = delta / f32( n ) * 0.9;
+	let jit = fract( 52.9829189 * fract( dot( in.pos.xy, vec2f( 0.06711056, 0.00583715 ) ) ) + f32( frame.frameIndex % 16u ) * 0.0625 );
+	var p = uv + stepV * jit;
+	var acc = vec3f( 0.0 );
+	var w = 1.0;
+	for ( var i = 0; i < n; i++ ) {
+		// weighted toward the sun: the bright core feeds the shafts
+		let toSun = length( ( ss.xy - p ) * vec2f( 1.0, 0.6 ) );
+		acc += rSample( p ) * w * exp( - toSun * 3.0 );
+		w *= 0.965;
+		p += stepV;
+	}
+	return vec4f( acc / f32( n ), 1.0 );
+}
+`,
+		} );
 
 	}
 
@@ -314,6 +378,7 @@ ${ reduce }
 				post: { uniform: this.uniforms },
 				postResolved: { texture: () => this.taau.texture },
 				postBloom: { texture: () => this.bloomTex.texture },
+				postRays: { texture: () => this.raysRT.texture },
 				postExposure: { storage: this.exposure, access: 'read' },
 			},
 			code: ACES + /* wgsl */`
@@ -347,7 +412,35 @@ fn postHash( p: vec2u, f: u32 ) -> f32 {
 
 fn fragment( in: FSIn ) -> vec4f {
 	let uv = in.uv;
-	var c = mbApply( rcas( uv ), uv ) + textureSampleLevel( postBloom, smpLinearClamp, uv, 0.0 ).rgb * post.bloom + flareLight( uv );
+	var base = rcas( uv );
+	// water drops on the lens: each cell may hold a drop that slides down, bending the view inside it
+	if ( post.droplets > 0.01 ) {
+		let gd = vec2f( 18.0, 11.0 );
+		let cellUv = uv * gd;
+		let cid = floor( cellUv );
+		let hh = fract( sin( dot( cid, vec2f( 12.9898, 78.233 ) ) ) * 43758.5453 );
+		if ( hh < post.droplets * 0.75 ) {
+			let slide = fract( hh * 7.0 ) * 0.3 * ( 1.0 - post.droplets );
+			let ctr = vec2f( 0.3 + fract( hh * 13.0 ) * 0.4, 0.3 + fract( hh * 29.0 ) * 0.4 + slide );
+			let rel = ( fract( cellUv ) - ctr ) * vec2f( 1.0, 1.3 );
+			let rad = 0.12 + fract( hh * 53.0 ) * 0.14;
+			let q = length( rel ) / rad;
+			if ( q < 1.0 ) {
+				let lensUv = uv - rel * 0.06 * ( 1.0 - q );
+				base = textureSampleLevel( postResolved, smpLinearClamp, lensUv, 0.0 ).rgb * 0.9;
+				base += vec3f( 0.6 ) * smoothstep( 0.75, 0.95, q ) * smoothstep( 1.0, 0.95, q ) * ( 0.5 + 0.5 * select( 0.0, 1.0, rel.y < 0.0 ) );
+			}
+		}
+	}
+	// chromatic aberration: red and blue pulled apart toward the edges (hits, jumps, huge speed)
+	if ( post.chroma > 0.0005 ) {
+		let off = ( uv - 0.5 ) * post.chroma * 0.02;
+		base.r = textureSampleLevel( postResolved, smpLinearClamp, uv + off, 0.0 ).r;
+		base.b = textureSampleLevel( postResolved, smpLinearClamp, uv - off, 0.0 ).b;
+	}
+	var c = mbApply( base, uv ) + textureSampleLevel( postBloom, smpLinearClamp, uv, 0.0 ).rgb * post.bloom + flareLight( uv );
+	// light shafts
+	c += textureSampleLevel( postRays, smpLinearClamp, uv, 0.0 ).rgb * post.rays * post.sunScreen.z * 0.9;
 	c *= postExposure[ 0 ];
 	c = c * vec3f( 1.0 + post.warmth, 1.0, 1.0 - post.warmth );
 	let l = luminance( c );
@@ -358,6 +451,16 @@ fn fragment( in: FSIn ) -> vec4f {
 	c *= 1.0 - smoothstep( 0.25, 0.75, rv ) * post.vignette;
 	// damage: red pulse at the edges
 	c = mix( c, c * vec3f( 1.6, 0.35, 0.3 ) + vec3f( 0.05, 0.0, 0.0 ), post.damage * smoothstep( 0.2, 0.7, rv ) );
+	// speed lines racing out of the centre
+	if ( post.speed > 0.01 ) {
+		let ang = atan2( dv.y, dv.x ) / 6.2832 + 0.5;
+		let cell = floor( ang * 150.0 );
+		let hh = fract( sin( cell * 12.9898 ) * 43758.5453 );
+		let across = abs( fract( ang * 150.0 ) - 0.5 );
+		let m = fract( rv * 2.2 - frame.time * ( 1.6 + hh * 2.2 ) + hh * 7.0 );
+		let streak = smoothstep( 0.0, 0.08, m ) * smoothstep( 0.45, 0.08, m ) * smoothstep( 0.3, 0.05, across ) * step( 0.82, hh );
+		c += vec3f( 0.9, 0.95, 1.0 ) * streak * smoothstep( 0.28, 0.62, rv ) * post.speed * 0.35;
+	}
 	let px = vec2u( in.pos.xy );
 	let fi = frame.frameIndex;
 	let n = ( postHash( px, fi ) + postHash( px + vec2u( 7919u, 104729u ), fi ) - 1.0 ) * 0.5;
@@ -394,6 +497,7 @@ fn fragment( in: FSIn ) -> vec4f {
 		}
 
 		this.flare.setDepthHeight( ih );
+		if ( this.raysRT ) this.raysRT.setSize( Math.max( 1, Math.round( ow / 4 ) ), Math.max( 1, Math.round( oh / 4 ) ) );
 
 	}
 
@@ -454,6 +558,7 @@ fn fragment( in: FSIn ) -> vec4f {
 		this.motionBlur.compute( this._outW, this._outH );
 		this.taau.render();
 		for ( const [ pass, rt ] of this._bloomPasses ) pass.render( { colorViews: [ rt.texture ], clear: CLR } );
+		if ( this.params.sunScreen.value[ 2 ] > 0.001 && this.params.rays.value > 0 ) this._raysPass.render( { colorViews: [ this.raysRT.texture ], clear: CLR } );
 		const out = GPU.context.getCurrentTexture().createView();
 		this._finalPass.render( { colorViews: [ out ], clear: CLR } );
 		this.meterKernel.dispatch( [ 1, 1, 1 ] );

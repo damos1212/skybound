@@ -5,6 +5,7 @@ import { Material } from '../engine/render/Material.js';
 import { ShaderModule } from '../engine/gpu/Shader.js';
 import { Color, Vector3, MathUtils } from '../engine/math/index.js';
 import { ToyBuilder, toyMaterials } from './Toy.js';
+import { G } from '../engine/render/Frame.js';
 
 // The launch island: an analytic heightfield (the same function in JS and WGSL, so the ocean can
 // shade its shallows and surf line without a texture), a vertex-coloured terrain mesh and toy props:
@@ -297,7 +298,7 @@ function launchPad( b ) {
 
 }
 
-function hangar( b, x, z, yaw ) {
+function hangar( b, x, z, yaw, nb = null ) {
 
 	const y = islandHeight( x, z );
 	const place = ( lx, ly, lz ) => {
@@ -319,6 +320,13 @@ function hangar( b, x, z, yaw ) {
 	b.add( new RoundedBoxGeometry( 8, 1.6, 0.4, 2, 0.15 ), { position: place( 0, 10.6, 7.2 ), rotation: [ 0, yaw, 0 ], color: 0xffcf3f } );
 	// windows
 	for ( const lx of [ - 8, 8 ] ) b.add( new BoxGeometry( 2.6, 2.2, 0.2 ), { position: place( lx, 5, 7.05 ), rotation: [ 0, yaw, 0 ], color: 0x9fd4ea } );
+	// lit windows and a door lamp after dusk
+	if ( nb ) {
+
+		for ( const lx of [ - 8, 8 ] ) nb.add( new BoxGeometry( 2.3, 1.9, 0.12 ), { position: place( lx, 5, 7.18 ), rotation: [ 0, yaw, 0 ], color: 0xffc070 } );
+		nb.add( new SphereGeometry( 0.35, 10, 8 ), { position: place( 0, 7.6, 7.4 ), color: 0xffe0a0 } );
+
+	}
 	// fuel tanks beside it
 	for ( let i = 0; i < 3; i ++ ) b.add( new CylinderGeometry( 1.1, 1.1, 3.4, 16 ), { position: place( 12.4, 2.2, - 4 + i * 2.6 ), color: [ 0xe8e2d6, 0xd9412f, 0xe8e2d6 ][ i ] } );
 
@@ -521,8 +529,25 @@ export class Island {
 
 		const b = new ToyBuilder();
 		launchPad( b );
-		hangar( b, - 46, - 34, 0.35 );
+		// what glows after dusk: windows, lamp heads, the lighthouse lantern
+		const nb = new ToyBuilder();
+		hangar( b, - 46, - 34, 0.35, nb );
+		// two lamp posts by the pad
+		this.lampSpots = [];
+		for ( const [ lx, lz ] of [ [ - 8, - 7 ], [ 8, 7 ] ] ) {
+
+			const gy = islandHeight( LAUNCH.x + lx, LAUNCH.z + lz );
+			b.add( new CylinderGeometry( 0.1, 0.14, 5.2, 8 ), { position: [ LAUNCH.x + lx, gy + 2.6, LAUNCH.z + lz ], color: 0x2b2f36 } );
+			nb.add( new SphereGeometry( 0.42, 12, 8 ), { position: [ LAUNCH.x + lx, gy + 5.4, LAUNCH.z + lz ], color: 0xffe0a0 } );
+			this.lampSpots.push( new Vector3( LAUNCH.x + lx, gy + 5.4, LAUNCH.z + lz ) );
+
+		}
+
 		this.lampPos = lighthouse( b, 150, - 330 );
+		nb.add( new CylinderGeometry( 1.7, 1.7, 2.4, 16 ), { position: [ this.lampPos.x, this.lampPos.y, this.lampPos.z ], color: 0xfff2c8 } );
+		this.nightMaterial = new Material( { name: 'night-glow', vertexColors: true, lit: false, uniforms: { k: [ 'f32', 0 ] }, surface: 's.emissive = s.albedo * 8.0 * mat.k; s.albedo *= 0.25 * ( 1.0 - mat.k );' } );
+		this.nightGlow = new Mesh( nb.build(), this.nightMaterial );
+		this.nightGlow.castShadow = false;
 		const r = rng( 7 );
 		// foliage (fronds, canopies, bushes, grass): its own mesh, swaying, lit through from behind
 		const fb = new ToyBuilder();
@@ -641,10 +666,154 @@ export class Island {
 
 		this.bargeLamps = new Mesh( lamps.build(), mats.glow );
 		this.barge.add( this.bargeLamps );
+		this.group.add( this.nightGlow );
+
+		// a crowd of islanders on the sand behind the pad: they bob about and cheer launches and records
+		const cr = rng( 21 );
+		this.crowd = [];
+		const shirts = [ 0xe2463a, 0x3a6ea5, 0xffc93c, 0x3ccf6e, 0xb070ff, 0xff7a3c, 0xf4efe6, 0x2f6fde ];
+		const skins = [ 0xf1c7a0, 0xc68c5a, 0x8d5a36, 0xe8b894 ];
+		for ( let i = 0; i < 14; i ++ ) {
+
+			const x = LAUNCH.x - 16 + i * 2.3 + ( cr() - 0.5 ) * 1.2, z = LAUNCH.z - 15 - cr() * 7;
+			const pb = new ToyBuilder();
+			const tall = 0.85 + cr() * 0.35;
+			pb.add( new CylinderGeometry( 0.26, 0.3, 0.9 * tall, 10 ), { position: [ 0, 0.45 * tall + 0.35, 0 ], color: shirts[ Math.floor( cr() * shirts.length ) ] } );
+			pb.add( new CylinderGeometry( 0.12, 0.12, 0.45, 6 ), { position: [ - 0.12, 0.22, 0 ], color: 0x2b2f36 } );
+			pb.add( new CylinderGeometry( 0.12, 0.12, 0.45, 6 ), { position: [ 0.12, 0.22, 0 ], color: 0x2b2f36 } );
+			pb.add( new SphereGeometry( 0.24, 12, 10 ), { position: [ 0, 0.9 * tall + 0.6, 0 ], color: skins[ Math.floor( cr() * skins.length ) ] } );
+			if ( cr() < 0.5 ) pb.add( new ConeGeometry( 0.42, 0.25, 12 ), { position: [ 0, 0.9 * tall + 0.82, 0 ], color: 0xe8d6a0 } );
+			for ( const sx of [ - 1, 1 ] ) pb.add( new CylinderGeometry( 0.07, 0.07, 0.6, 6 ), { position: [ sx * 0.34, 0.9 * tall + 0.35, 0 ], rotation: [ 0, 0, sx * 2.6 ], color: 0xf1c7a0 } );
+			const m = new Mesh( pb.build(), toyMaterials().paint );
+			m.castShadow = true;
+			const gy = islandHeight( x, z );
+			m.position.set( x, gy - 0.05, z );
+			m.rotation.y = Math.atan2( LAUNCH.x - x, LAUNCH.z - z ) + ( cr() - 0.5 ) * 0.6;
+			m.userData = { y: gy - 0.05, phase: cr() * 6, hop: 0.6 + cr() * 0.8 };
+			this.group.add( m );
+			this.crowd.push( m );
+
+		}
+
+		this.cheerT = 0;
+
+		// sailboats and a fishing boat going round the island
+		this.boats = [];
+		const br = rng( 5 );
+		for ( let i = 0; i < 4; i ++ ) {
+
+			const bb = new ToyBuilder();
+			const sail = i < 3;
+			const L = sail ? 7 + br() * 3 : 9;
+			bb.add( new RoundedBoxGeometry( L, 1.4, L * 0.34, 2, 0.4 ), { position: [ 0, 0.3, 0 ], color: [ 0xf4efe6, 0x3a6ea5, 0xe2463a, 0x2b2f36 ][ i ] } );
+			bb.add( new BoxGeometry( L * 0.9, 0.2, L * 0.3 ), { position: [ 0, 1.05, 0 ], color: 0xb98a4e } );
+			if ( sail ) {
+
+				bb.add( new CylinderGeometry( 0.1, 0.12, L * 1.3, 6 ), { position: [ 0.4, L * 0.65 + 1, 0 ], color: 0x8a6a48 } );
+				bb.add( new ConeGeometry( L * 0.42, L * 1.15, 3 ), { position: [ - 0.9, L * 0.62 + 1.2, 0 ], scale: [ 1, 1, 0.06 ], color: [ 0xf4efe6, 0xffc93c, 0xf4efe6 ][ i ] } );
+
+			} else {
+
+				bb.add( new BoxGeometry( 3, 2.2, 2.6 ), { position: [ - 1.2, 2.2, 0 ], color: 0xf4efe6 } );
+				bb.add( new BoxGeometry( 3.2, 0.3, 2.8 ), { position: [ - 1.2, 3.4, 0 ], color: 0xe2463a } );
+
+			}
+
+			const m = new Mesh( bb.build(), toyMaterials().paint );
+			m.castShadow = true;
+			this.group.add( m );
+			this.boats.push( { m, r: 470 + i * 70 + br() * 40, a: br() * Math.PI * 2, w: ( sail ? 0.012 : 0.009 ) * ( i % 2 ? - 1 : 1 ), phase: br() * 6 } );
+
+		}
+
+		// the lighthouse beam: a long soft cone turning over the sea after dusk
+		const beamGeo = new ConeGeometry( 14, 260, 24, 1, true ).translate( 0, - 130, 0 ).rotateZ( Math.PI / 2 );
+		this.beamMaterial = new Material( {
+			name: 'lighthouse-beam', lit: false, transparent: true, depthWrite: false, blending: 'additive', side: 'double', uniforms: { k: [ 'f32', 0 ] },
+			varyings: { vAlong: 'f32' }, vertex: 'o.vAlong = v.position.x / 260.0;',
+			surface: 'let f = pow( sat( abs( dot( in.N, in.V ) ) ), 1.5 ); let a = f * ( 1.0 - in.vs.vAlong ) * mat.k; s.albedo = vec3f( 0.0 ); s.emissive = vec3f( 1.0, 0.92, 0.72 ) * a * 1.6; s.alpha = a;',
+		} );
+		this.beam = new Mesh( beamGeo, this.beamMaterial );
+		this.beam.position.copy( this.lampPos );
+		this.beam.layers.set( 2 );
+		this.beam.castShadow = false;
+		this.beam.visible = false;
+		this.group.add( this.beam );
+		this.beamDir = new Vector3( 1, 0, 0 );
+
+	}
+
+	cheer( seconds = 3 ) {
+
+		this.cheerT = Math.max( this.cheerT, seconds );
+
+	}
+
+	// the island's lamps as local lights (drawn coordinates follow the group and the bobbing barge)
+	addLights( lights ) {
+
+		const g = this.group;
+		const at = ( local ) => {
+
+			const v = new Vector3();
+			return () => v.copy( local ).add( g.position );
+
+		};
+
+		for ( const p of this.lampSpots ) lights.add( { position: at( p ), color: [ 1, 0.78, 0.5 ], intensity: 26, range: 26, night: true } );
+		lights.add( { position: at( new Vector3( - 46 + 7.4 * Math.sin( 0.35 ), islandHeight( - 46, - 34 ) + 7.6, - 34 + 7.4 * Math.cos( 0.35 ) ) ), color: [ 1, 0.7, 0.42 ], intensity: 30, range: 30, night: true } );
+		lights.add( { position: at( this.lampPos ), color: [ 1, 0.9, 0.7 ], intensity: 90, range: 80, night: true } );
+		const beamDir = this.beamDir;
+		lights.add( { position: at( this.lampPos ), dir: () => beamDir, color: [ 1, 0.92, 0.75 ], intensity: 6000, range: 420, cosInner: 0.995, cosOuter: 0.975, night: true } );
+		const b = this.barge;
+		for ( const [ x, z ] of [ [ - 18, - 11 ], [ 18, 11 ] ] ) {
+
+			const v = new Vector3();
+			lights.add( { position: () => v.set( x, 8.1, z ).add( b.position ).add( g.position ), color: [ 1, 0.95, 0.8 ], intensity: 120, range: 60, night: true } );
+
+		}
 
 	}
 
 	update( dt, time, wind ) {
+
+		// after dusk: windows and lamps glow, the lighthouse beam turns
+		const night = MathUtils.smoothstep( G.night.value, 0.1, 0.7 );
+		this.nightMaterial.set( 'k', night );
+		this.beam.visible = night > 0.01;
+		this.beamMaterial.set( 'k', night * 0.35 );
+		const ba = time * 0.6;
+		this.beam.rotation.set( 0, ba, - 0.06 );
+		this.beamDir.set( Math.cos( ba ), - 0.06, - Math.sin( ba ) ).normalize();
+
+		// the crowd: idle shuffling, jumping and waving when they cheer
+		this.cheerT = Math.max( 0, this.cheerT - dt );
+		for ( const m of this.crowd ) {
+
+			const u = m.userData;
+			const hop = this.cheerT > 0 ? Math.abs( Math.sin( time * 9 * u.hop + u.phase ) ) * 0.7 : Math.max( 0, Math.sin( time * 1.3 + u.phase ) ) * 0.04;
+			m.position.y = u.y + hop;
+			m.rotation.z = this.cheerT > 0 ? Math.sin( time * 11 + u.phase ) * 0.12 : 0;
+
+		}
+
+		// boats sail round the island, bobbing
+		for ( const b of this.boats ) {
+
+			b.a += b.w * dt;
+			const x = - 40 + Math.cos( b.a ) * b.r, z = - 190 + Math.sin( b.a ) * b.r * 0.8;
+			const px = b.m.position.x, pz = b.m.position.z;
+			if ( dt > 0 ) {
+
+				b.heading = Math.atan2( z - pz, x - px );
+				b.speed = Math.hypot( x - px, z - pz ) / dt;
+
+			}
+
+			b.m.position.set( x, Math.sin( time * 0.9 + b.phase ) * 0.25 - 0.2, z );
+			b.m.rotation.set( Math.sin( time * 0.7 + b.phase ) * 0.05, - b.a + ( b.w > 0 ? Math.PI : 0 ), Math.sin( time * 0.8 + b.phase ) * 0.06 );
+
+		}
 
 		// the barge rides the swell
 		this.barge.position.y = Math.sin( time * 0.7 ) * 0.25;

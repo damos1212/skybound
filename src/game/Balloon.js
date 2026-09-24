@@ -172,6 +172,41 @@ export class Balloon {
 		}
 
 		this.basketTop = h;
+		// the pilot: leather cap, goggles and a red scarf, arms free to wave (open baskets only)
+		this.pilot = null;
+		if ( basket <= 2 ) {
+
+			const pb = new ToyBuilder();
+			pb.add( new CylinderGeometry( 0.2, 0.24, 0.7, 12 ), { position: [ 0, 0.35, 0 ], color: 0x3a6ea5 } );
+			pb.add( new SphereGeometry( 0.2, 14, 10 ), { position: [ 0, 0.9, 0 ], color: 0xf1c7a0 } );
+			pb.add( new SphereGeometry( 0.215, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.55 ), { position: [ 0, 0.93, 0 ], color: 0x6b3f22 } );
+			pb.add( new TorusGeometry( 0.07, 0.025, 6, 12 ), { position: [ - 0.08, 0.95, 0.17 ], color: 0x2b2f36 } );
+			pb.add( new TorusGeometry( 0.07, 0.025, 6, 12 ), { position: [ 0.08, 0.95, 0.17 ], color: 0x2b2f36 } );
+			pb.add( new CylinderGeometry( 0.06, 0.06, 0.02, 10 ), { position: [ - 0.08, 0.95, 0.18 ], rotation: [ Math.PI / 2, 0, 0 ], color: 0x9fd8ff } );
+			pb.add( new CylinderGeometry( 0.06, 0.06, 0.02, 10 ), { position: [ 0.08, 0.95, 0.18 ], rotation: [ Math.PI / 2, 0, 0 ], color: 0x9fd8ff } );
+			pb.add( new TorusGeometry( 0.2, 0.06, 6, 16 ), { position: [ 0, 0.68, 0 ], rotation: [ Math.PI / 2, 0, 0 ], color: 0xe2463a } );
+			pb.add( new BoxGeometry( 0.1, 0.35, 0.04 ), { position: [ 0.12, 0.55, 0.2 ], rotation: [ 0.2, 0, 0.3 ], color: 0xe2463a } );
+			this.pilot = new Group();
+			const body = new Mesh( pb.build(), this.mats.paint );
+			body.castShadow = true;
+			this.pilot.add( body );
+			this.pilotArms = [];
+			for ( const sx of [ - 1, 1 ] ) {
+
+				const arm = new Group();
+				arm.position.set( sx * 0.22, 0.62, 0 );
+				const am = new Mesh( new ToyBuilder().add( new CylinderGeometry( 0.06, 0.06, 0.45, 8 ), { position: [ 0, - 0.2, 0 ], color: 0x3a6ea5 } ).add( new SphereGeometry( 0.07, 8, 6 ), { position: [ 0, - 0.44, 0 ], color: 0xf1c7a0 } ).build(), this.mats.paint );
+				arm.add( am );
+				this.pilot.add( arm );
+				this.pilotArms.push( arm );
+
+			}
+
+			this.pilot.position.set( w * 0.18, h - 0.55, w * 0.12 );
+			this.group.add( this.pilot );
+
+		}
+
 		const gondola = new Mesh( gb.build(), basket === 3 || basket >= 4 ? this.mats.paint : this.mats.matte );
 		gondola.castShadow = true;
 		gondola.receiveShadow = true;
@@ -349,6 +384,25 @@ export class Balloon {
 		this.bubble.visible = shield > 0.01 || shieldHit > 0.01;
 		this.shieldMat.set( 'strength', shield );
 		this.shieldMat.set( 'hit', shieldHit );
+
+		// the pilot: arms down, a hand on the burner when it roars, both up to cheer
+		if ( this.pilot ) {
+
+			this.cheerT = Math.max( 0, ( this.cheerT || 0 ) - dt );
+			const cheer = this.cheerT > 0 ? 1 : 0;
+			const wave = Math.sin( time * 14 ) * 0.35;
+			this.pilotArms[ 0 ].rotation.set( 0, 0, cheer ? - 2.6 + wave : - 0.25 );
+			this.pilotArms[ 1 ].rotation.set( 0, 0, cheer ? 2.6 - wave : 0.25 + this.burn * 2.2 );
+			this.pilot.position.y = this.basketTop - 0.55 + ( cheer ? Math.abs( Math.sin( time * 9 ) ) * 0.25 : 0 );
+			this.pilot.rotation.y = Math.sin( time * 0.7 ) * 0.4 - steer * 0.6;
+
+		}
+
+	}
+
+	cheer( seconds = 2 ) {
+
+		this.cheerT = Math.max( this.cheerT || 0, seconds );
 
 	}
 

@@ -50,6 +50,48 @@ export class Music {
 		lp.connect( this.wet ).connect( this.out );
 		this.out.connect( destination );
 		this.nextTime = ctx.currentTime + 0.3;
+		// noise for the drums
+		const len = ctx.sampleRate;
+		const buf = ctx.createBuffer( 1, len, ctx.sampleRate );
+		const d = buf.getChannelData( 0 );
+		for ( let i = 0; i < len; i ++ ) d[ i ] = Math.random() * 2 - 1;
+		this.noiseBuf = buf;
+		this.drive = 0;
+
+	}
+
+	_drum( { t, type, gain, f0 = 1000, f1 = f0, dur = 0.1, q = 0.8 } ) {
+
+		const c = this.ctx;
+		const src = c.createBufferSource();
+		src.buffer = this.noiseBuf;
+		const flt = c.createBiquadFilter();
+		flt.type = type;
+		flt.Q.value = q;
+		flt.frequency.setValueAtTime( f0, t );
+		flt.frequency.exponentialRampToValueAtTime( Math.max( 20, f1 ), t + dur );
+		const g = c.createGain();
+		g.gain.setValueAtTime( gain, t );
+		g.gain.exponentialRampToValueAtTime( 0.0001, t + dur );
+		src.connect( flt ).connect( g ).connect( this.out );
+		src.start( t, Math.random() * 0.5 );
+		src.stop( t + dur + 0.05 );
+
+	}
+
+	_kick( t, gain ) {
+
+		const c = this.ctx;
+		const o = c.createOscillator();
+		o.type = 'sine';
+		o.frequency.setValueAtTime( 140, t );
+		o.frequency.exponentialRampToValueAtTime( 42, t + 0.14 );
+		const g = c.createGain();
+		g.gain.setValueAtTime( gain, t );
+		g.gain.exponentialRampToValueAtTime( 0.0001, t + 0.3 );
+		o.connect( g ).connect( this.out );
+		o.start( t );
+		o.stop( t + 0.35 );
 
 	}
 
@@ -101,6 +143,8 @@ export class Music {
 		const h = game.realH ? game.realH() : 0;
 		const target = this.mood === 'flight' ? 1 - Math.min( 0.5, Math.log10( 1 + h / 1000 ) * 0.12 ) : 1;
 		this.intensity += ( target - this.intensity ) * Math.min( 1, dt );
+		// the drums follow the action (combos, burning, hyperjumps): set by the game
+		this.drive += ( ( game.musicDrive || 0 ) - this.drive ) * Math.min( 1, dt * 1.5 );
 		this.fb.gain.setTargetAtTime( M.echo, c.currentTime, 0.5 );
 		this.wet.gain.setTargetAtTime( M.echo * 0.8, c.currentTime, 0.5 );
 		const sixteenth = 60 / M.bpm / 4;
@@ -140,6 +184,16 @@ export class Music {
 
 			// a soft tick on the beat in flight
 			if ( ( this.mood === 'flight' || this.mood === 'cosmic' ) && beat % 4 === 2 ) this._note( { f: 5200, t, dur: 0.03, type: 'square', gain: 0.006 * this.intensity, cutoff: 8000 } );
+			// drums, layered in as the action heats up: kick, clap, hats, then a busier groove
+			const dr = this.drive;
+			if ( dr > 0.12 && this.mood !== 'hangar' && this.mood !== 'results' ) {
+
+				const k = Math.min( 1, ( dr - 0.12 ) * 2 );
+				if ( beat === 0 || beat === 8 || ( dr > 0.6 && ( beat === 10 || beat === 3 ) ) ) this._kick( t, 0.32 * k );
+				if ( dr > 0.3 && ( beat === 4 || beat === 12 ) ) this._drum( { t, type: 'bandpass', gain: 0.22 * k, f0: 1800, f1: 900, dur: 0.16, q: 0.9 } );
+				if ( beat % 2 === 0 || dr > 0.7 ) this._drum( { t, type: 'highpass', gain: ( beat % 4 === 2 ? 0.07 : 0.045 ) * k, f0: 7000, f1: 9000, dur: 0.045 } );
+
+			}
 			this.step ++;
 			this.nextTime += sixteenth;
 

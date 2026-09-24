@@ -1,7 +1,7 @@
 import { Mesh } from '../engine/scene/Mesh.js';
 import { Material } from '../engine/render/Material.js';
-import { BoxGeometry, CylinderGeometry, SphereGeometry, ConeGeometry, IcosahedronGeometry, TorusGeometry, RoundedBoxGeometry } from '../engine/geometry/index.js';
-import { Vector3 } from '../engine/math/index.js';
+import { BoxGeometry, CylinderGeometry, SphereGeometry, ConeGeometry, IcosahedronGeometry, TorusGeometry, RoundedBoxGeometry, LatheGeometry } from '../engine/geometry/index.js';
+import { Vector2, Vector3 } from '../engine/math/index.js';
 import { ToyBuilder, toyMaterials } from '../world/Toy.js';
 
 // Toy models of everything that flies besides the player, built once and shared: Earth traffic,
@@ -263,6 +263,23 @@ export function models() {
 	for ( const z of [ - 5, 5 ] ) whale.add( new BoxGeometry( 4, 0.3, 3 ), { position: [ 2, - 2.5, z ], rotation: [ z > 0 ? 0.5 : - 0.5, 0, 0 ], color: 0x2f4f8f, flat: true } );
 	whale.add( new SphereGeometry( 0.5, 8, 6 ), { position: [ 9.5, 1, 3 ], color: 0x111111 } );
 	M.whale = whale.build();
+
+	// the humpback off the beach: a tapered body (head +x), pale belly, the long white flippers, flukes
+	const hb = T();
+	const prof = [ [ 0, 0.1 ], [ 0.08, 0.3 ], [ 0.2, 0.62 ], [ 0.38, 1.25 ], [ 0.56, 1.7 ], [ 0.7, 1.8 ], [ 0.83, 1.62 ], [ 0.93, 1.2 ], [ 0.985, 0.6 ], [ 1, 0.05 ] ];
+	hb.add( new LatheGeometry( prof.map( ( [ t, r ] ) => new Vector2( r, t * 14 - 7 ) ), 20 ), { rotation: [ 0, 0, - Math.PI / 2 ], scale: [ 0.82, 1, 1 ], color: 0x2c3742 } );
+	hb.add( new SphereGeometry( 1, 18, 10 ), { position: [ 1.6, - 0.62, 0 ], scale: [ 5.4, 0.95, 1.4 ], color: 0xdde4e8 } );
+	for ( const sz of [ - 1, 1 ] ) {
+
+		hb.add( new BoxGeometry( 1.1, 0.16, 4.8 ), { position: [ 1.2, - 0.95, sz * 3.4 ], rotation: [ sz * 0.35, sz * 0.55, 0 ], color: 0xc9d3d9, flat: true } );
+		hb.add( new SphereGeometry( 1, 12, 8 ), { position: [ - 7.4, 0.05, sz * 1.5 ], rotation: [ 0, sz * 0.55, 0 ], scale: [ 1.2, 0.14, 2.1 ], color: 0x2c3742 } );
+		hb.add( new SphereGeometry( 0.14, 8, 6 ), { position: [ 5.3, - 0.15, sz * 1.28 ], color: 0x0d0f12 } );
+
+	}
+
+	hb.add( new BoxGeometry( 0.9, 0.55, 0.14 ), { position: [ - 2.8, 1.25, 0 ], rotation: [ 0, 0, 0.55 ], color: 0x2c3742, flat: true } );
+	for ( let i = 0; i < 5; i ++ ) hb.add( new SphereGeometry( 0.16, 6, 4 ), { position: [ 6.3 - i * 0.45, 0.72 + i * 0.12, ( i % 2 - 0.5 ) * 0.5 ], color: 0x3a4652 } );
+	M.humpback = hb.build();
 	M.flare = T().add( new TorusGeometry( 16, 2.4, 10, 40, Math.PI ), { color: 0xffffff } ).build();
 
 	// ---- beyond the solar system

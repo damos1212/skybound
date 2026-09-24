@@ -2,6 +2,8 @@ import { Vector3, MathUtils } from '../engine/math/index.js';
 import { Mesh } from '../engine/scene/Mesh.js';
 import { BoxGeometry } from '../engine/geometry/index.js';
 import { ToyBuilder, toyMaterials } from '../world/Toy.js';
+import { G } from '../engine/render/Frame.js';
+import { models as hazardModels, mats as hazardMats } from './Models.js';
 import { Balloon } from './Balloon.js';
 import { Rocket, ROCKET_LIVERIES } from './Rocket.js';
 import { Starship, SHIP_LIVERIES } from './Starship.js';
@@ -9,11 +11,13 @@ import { Warpship } from './Warpship.js';
 import { Ark } from './Ark.js';
 import { Hazards } from './Hazards.js';
 import { Input } from './Input.js';
-import { createState, step, dropBag, windAt, createRocketState, stepRocket, createShipState, stepShip, ORBIT_START, SHIP_START, JUMP_TIME } from './Physics.js';
+import { createState, step, dropBag, windAt, createRocketState, stepRocket, createShipState, stepShip, ORBIT_START, SHIP_START, JUMP_TIME, AFTERBURNER_TIME } from './Physics.js';
 import { computeStats, defaultLevels, UPGRADES, VEHICLES, VEHICLE_BY_ID, isShip } from './Upgrades.js';
 import { ZONES, zoneAt, zoneIndex, zoneById, altitudePay, formatAltitude } from './Zones.js';
 import { ACHIEVEMENTS } from './Achievements.js';
 import { refreshMissions, missionProgress } from './Missions.js';
+import { rollEvent } from './Events.js';
+import { funFact } from './Facts.js';
 import { routeAt, flybyAt, toWorld, BODIES, BODY_BY_ID, AU, LY, GC, ROUTE_LENGTH, T as BT, norm, sub, len, dot, cross, mul } from './Route.js';
 import { LAUNCH, BARGE, islandHeight } from '../world/Island.js';
 import { TIMES_OF_DAY } from '../App.js';
@@ -152,6 +156,16 @@ export class Game {
 		app.scene.add( this.bestLine );
 		this.hitstop = 0;
 		this.camRoll = 0;
+		this.fireworks = [];
+		// a humpback that surfaces off the beach now and then
+		this.whale = new Mesh( hazardModels().humpback, hazardMats().paint );
+		this.whale.castShadow = true;
+		this.whale.visible = false;
+		app.scene.add( this.whale );
+		this.whaleT = 20 + Math.random() * 20;
+		this.whaleRun = null;
+		// the engine's glow on everything around it (burner, exhaust, drive)
+		this.engineLight = app.lights.add( { position: new Vector3(), color: [ 1, 0.55, 0.2 ], intensity: 0, range: 40, flicker: 0.3 } );
 		this.hazards.onEvent = ( e ) => {
 
 			if ( e === 'thunder' ) this.sound.play( 'thunder' );
@@ -338,6 +352,7 @@ export class Game {
 		this.bestLineInfo = null;
 		this.app.post.params.cloudFog.value = 0;
 		if ( instant ) this._camSnap = true;
+		this.nextEvent = rollEvent( this.vehicle, this.save.stats.runs );
 		this.ui.show( 'hangar' );
 		this.music.setMood( 'hangar' );
 
@@ -350,6 +365,7 @@ export class Game {
 		this.persist();
 		this.resetVehicle();
 		this.sound.play( 'select' );
+		if ( this.nextEvent && ! this.nextEvent.vehicles.includes( id ) ) this.nextEvent = rollEvent( id, this.save.stats.runs );
 		this.ui.show( 'hangar' );
 
 	}
@@ -372,6 +388,7 @@ export class Game {
 		this.resetVehicle();
 		this.sound.play( 'unlock' );
 		this.particles.confetti( this.lp.x, this.lp.y + this.model.height * 0.6 );
+		this.celebrate( 10 );
 		this.ui.toast( `${ VEHICLE_BY_ID[ id ].name } unlocked!`, 3, 'record' );
 		this.checkAchievements();
 		this.ui.show( 'hangar' );
@@ -518,7 +535,9 @@ export class Game {
 			zonesNew: [], zones: [], zone: 'shore', endTimer: - 1, endReason: '', recordBroken: false, maxH: 0, overheated: false,
 			achievements: [], time: 0, timeOfDay: this.app.timeOfDay,
 			nearMisses: 0, combo: 0, bestCombo: 0, lastCoin: - 10, bags: 0, maxHBeforeHit: 0, missionsDone: [],
+			event: this.nextEvent && this.nextEvent.vehicles.includes( v ) ? this.nextEvent : null,
 		};
+		this.nextEvent = null;
 		void this.missions; // make sure this vehicle has its three missions
 		this.hazards.reset();
 		this.particles.clear();
@@ -543,12 +562,9 @@ export class Game {
 		this.state = 'flight';
 		const v = this.vehicle;
 		this.sound.play( v === 'balloon' ? 'launch' : 'ignition' );
-		const help = {
-			balloon: 'Hold SPACE to fire the burner · A / D to steer', rocket: 'Hold SPACE for thrust · A / D to tilt · boosters light with the engine', starship: 'Hold SPACE to burn: every second multiplies your speed · fly through rings for a kick',
-			warpship: 'Hold SPACE to burn · SHIFT to hyperjump (you pass through anything) · rings refill jumps', ark: 'Hold SPACE to burn · SHIFT to hyperjump · chain the rings!',
-		};
-		if ( ! this.save.seen[ v ] ) this.ui.toast( help[ v ], 5 );
-		this.save.seen[ v ] = true;
+		this.app.island.cheer( 3.5 );
+		if ( this.run.event ) this.ui.eventBanner( this.run.event );
+		this._help( v );
 		const qs = this.app.qs;
 		if ( this.sandbox && qs.has( 'start' ) && ! isShip( v ) ) {
 
@@ -566,12 +582,41 @@ export class Game {
 
 	}
 
+	// the controls, the first time each vehicle flies
+	_help( v ) {
+
+		const help = {
+			balloon: 'Hold SPACE to fire the burner · A / D to steer · SHIFT drops a sandbag', rocket: 'Hold SPACE for thrust · A / D to tilt · SHIFT fires an afterburner', starship: 'Hold SPACE to burn: every second multiplies your speed · fly through rings for a kick',
+			warpship: 'Hold SPACE to burn · SHIFT to hyperjump (you pass through anything) · rings refill jumps', ark: 'Hold SPACE to burn · SHIFT to hyperjump · chain the rings!',
+		};
+		if ( ! this.save.seen[ v ] ) this.ui.toast( help[ v ], 5 );
+		this.save.seen[ v ] = true;
+
+	}
+
+	// upgrades the player can buy right now for vehicle v
+	affordable( v = this.vehicle ) {
+
+		let n = 0;
+		for ( const u of UPGRADES[ v ] ) {
+
+			const next = u.levels[ ( this.save.levels[ v ][ u.id ] || 0 ) + 1 ];
+			if ( next && next.cost <= this.save.cash ) n ++;
+
+		}
+
+		return n;
+
+	}
+
 	// the Starship's cinematic ascent: lift off the barge, then cut to orbit
 	_starshipToOrbit() {
 
 		this.state = 'ascent';
 		this.ascent = 0;
 		this.sound.play( 'ignition' );
+		this.app.island.cheer( 4 );
+		if ( this.run.event ) this.ui.eventBanner( this.run.event );
 
 	}
 
@@ -604,6 +649,7 @@ export class Game {
 				this.state = 'flight';
 				this.updateSpace( 0 );
 				this.ui.zoneBanner( { name: 'Low Orbit', from: s.d, color: '#141a3c', tagline: 'Burn for the Moon!' }, false );
+				this._help( v );
 
 			} else {
 
@@ -658,6 +704,7 @@ export class Game {
 			this.sound.play( 'warpin' );
 			const z = zoneAt( s.d );
 			this.ui.zoneBanner( { ...z, tagline: this.vehicle === 'ark' ? 'Out the far side of the black hole!' : 'Past the heliopause. Burn for Alpha Centauri!' }, false );
+			this._help( this.vehicle );
 
 		}
 
@@ -694,7 +741,28 @@ export class Game {
 		const recordBonus = record && prevBest > 0 ? Math.round( Math.max( 0, pay - altitudePay( prevBest ) ) * 0.25 ) : 0;
 		const sub = pay + r.coins + zoneBonus + recordBonus;
 		const todBonus = Math.round( sub * ( tod.bonus - 1 ) );
-		const total = sub + todBonus + missionPay;
+		const eventBonus = r.event && r.event.pay ? Math.round( sub * ( r.event.pay - 1 ) ) : 0;
+		// the balloon set down on the pad: a bullseye bonus
+		let landBonus = 0, landText = '';
+		if ( reason === 'landed' && r.vehicle === 'balloon' ) {
+
+			const off = Math.abs( this.s.x - LAUNCH.x );
+			if ( off < 2.6 ) {
+
+				landBonus = Math.max( 150, Math.round( pay * 0.35 ) );
+				landText = 'BULLSEYE landing!';
+				this.save.stats.bullseyes = ( this.save.stats.bullseyes || 0 ) + 1;
+
+			} else if ( off < 6.5 ) {
+
+				landBonus = Math.max( 60, Math.round( pay * 0.12 ) );
+				landText = 'Landed on the pad';
+
+			}
+
+		}
+
+		const total = sub + todBonus + eventBonus + landBonus + missionPay;
 		this.save.cash += total;
 		this.save.bestBy[ r.vehicle ] = Math.max( prevBest, maxH );
 		this.save.best = Math.max( this.save.best, maxH );
@@ -712,14 +780,23 @@ export class Game {
 		void before;
 		this.sound.play( reason === 'pop' || reason === 'destroyed' ? 'pop' : reason === 'victory' ? 'record' : 'end' );
 		if ( record ) this.particles.confetti( this.lp.x, this.lp.y + this.model.height * 0.5, 160 );
+		if ( landBonus && landText.startsWith( 'BULL' ) ) {
+
+			this.particles.confetti( this.lp.x, this.lp.y + 4, 120 );
+			this.sound.play( 'chain' );
+
+		}
+
 		this.ui.showResults( {
-			reason, vehicle: r.vehicle, altitude: maxH, prevBest, record,
+			reason, vehicle: r.vehicle, altitude: maxH, prevBest, record, fact: funFact( maxH ),
 			lines: [
 				[ isShip( r.vehicle ) ? 'Distance' : 'Altitude', pay ],
 				[ `Coins ×${ r.coinCount }`, r.coins ],
 				...r.zonesNew.map( ( id ) => [ `New zone: ${ zoneById( id ).name }`, zoneById( id ).bonus ] ),
 				...( recordBonus ? [ [ 'New record bonus', recordBonus ] ] : [] ),
 				...( todBonus ? [ [ `${ tod.name } flight bonus`, todBonus ] ] : [] ),
+				...( eventBonus ? [ [ `${ r.event.name } bonus`, eventBonus ] ] : [] ),
+				...( landBonus ? [ [ landText, landBonus ] ] : [] ),
 				...r.missionsDone.map( ( m ) => [ `✔ ${ m.text }`, m.reward ] ),
 			],
 			achievements: r.achievements,
@@ -736,15 +813,24 @@ export class Game {
 
 	}
 
-	returnToPad() {
+	// back to the pad after a run; then: 'launch' (fly again) or 'shop' (straight to the workshop)
+	returnToPad( then = null ) {
 
+		if ( this._returning ) return;
+		this._returning = true;
 		if ( this.photo ) this.togglePhoto();
+		const r = this.run;
+		const party = r && ( r.recordBroken || r.zonesNew.length || r.endReason === 'victory' || r.missionsDone.length );
 
 		this.ui.fade( () => {
 
+			this._returning = false;
 			this.toHangar( true );
+			if ( party ) this.celebrate( r.recordBroken || r.endReason === 'victory' ? 9 : 5 );
 			this.app.post.cut();
 			if ( this.app.clouds ) this.app.clouds.resetHistory();
+			if ( then === 'launch' ) this.launch();
+			else if ( then === 'shop' ) this.openShop();
 
 		} );
 
@@ -791,12 +877,17 @@ export class Game {
 				if ( input.hit( 'Escape', 'KeyU' ) ) this.closeShop();
 				break;
 			case 'countdown':
+				// a tap skips to ignition
+				if ( input.hit( 'Space', 'Enter' ) && this.countdown > 1.0 ) this.countdown = 1.0;
 				this.updateCountdown( dt );
 				break;
 			case 'ascent':
+				// the cinematics are skippable once seen
+				if ( input.hit( 'Space', 'Enter' ) && this.save.seen[ this.vehicle ] ) this.ascent = Math.max( this.ascent, 3.2 );
 				this.updateAscent( dt );
 				break;
 			case 'jump':
+				if ( input.hit( 'Space', 'Enter' ) && this.save.seen[ this.vehicle ] ) this.jump.t = Math.max( this.jump.t, this.jump.dur * 0.86 );
 				this.updateJump( dt );
 				break;
 			case 'flight':
@@ -804,7 +895,14 @@ export class Game {
 				if ( ! this.paused ) this.updateFlight( dt );
 				break;
 			case 'results':
-				if ( input.hit( 'Space', 'Enter' ) && ! this.ui.creditsOpen ) this.returnToPad();
+				if ( ! this.ui.creditsOpen ) {
+
+					if ( input.hit( 'Space', 'Enter' ) ) this.returnToPad();
+					else if ( input.hit( 'KeyR' ) ) this.returnToPad( 'launch' );
+					else if ( input.hit( 'KeyU' ) ) this.returnToPad( 'shop' );
+
+				}
+
 				this.s.vy *= 1 - dt;
 				break;
 
@@ -812,6 +910,16 @@ export class Game {
 
 		const frozen = this.state === 'flight' && this.paused;
 		this.updateModel( frozen ? 0 : dt );
+		if ( this.fireworks.length ) this.updateFireworks( dt );
+		this.updateSea( dt );
+		// how hard the music drives: combos, the engine, hyperjumps, afterburners, speed
+		if ( this.state === 'flight' || this.state === 'jump' || this.state === 'ascent' ) {
+
+			const r = this.run, s = this.s;
+			const combo = r && r.time - r.lastCoin < 1.4 ? r.combo : 0;
+			this.musicDrive = Math.min( 1, 0.3 + ( s.burning ? 0.15 : 0 ) + combo / 40 + ( this.jumpFx || 0 ) * 0.5 + ( s.burstT > 0 ? 0.4 : 0 ) + ( this.state === 'jump' ? 0.5 : 0 ) + this.app.post.params.speed.value * 0.4 );
+
+		} else this.musicDrive = 0;
 		this.updateEffects( frozen ? 0 : dt );
 		this.updateCamera( dt );
 		if ( this.mode === 'space' ) this.updateSpace( frozen ? 0 : dt );
@@ -893,6 +1001,23 @@ export class Game {
 			}
 
 			if ( this.buffs.boost > 0 ) s.kick += 18 * dt;
+			// riding a thermal: rising air lifts the balloon
+			const th = this.hazards.thermalAt( this.lp.x, this.lp.y + this.model.height * 0.4 );
+			if ( th > 0 ) {
+
+				s.kick += 9 * th * dt;
+				if ( ! this.inThermal ) {
+
+					this.inThermal = true;
+					r.thermals = ( r.thermals || 0 ) + 1;
+					this.ui.toast( 'Thermal! Ride it up', 1.2, 'good' );
+					this.sound.play( 'whoosh' );
+
+				}
+
+				if ( Math.random() < 0.5 ) this.particles.emit( { soft: true, x: this.lp.x + ( Math.random() - 0.5 ) * 10, y: this.lp.y - 4, z: ( Math.random() - 0.5 ) * 6, vy: 16, life: 1.6, size: 0.4, grow: 1, color: [ 0.95, 0.92, 0.85 ], alpha: 0.35, drag: 0.4 } );
+
+			} else this.inThermal = false;
 			const onPad = Math.abs( s.x - LAUNCH.x ) < 6.2;
 			const ground = onPad ? PAD_Y : Math.max( 0, islandHeight( s.x, 0 ) );
 			for ( let i = 0; i < 2; i ++ ) step( s, st, inp, dt / 2, ground );
@@ -906,6 +1031,8 @@ export class Game {
 			const targetWarp = coasting ? MathUtils.clamp( s.vy / 50, 1, 40 ) : 1;
 			this.warp += ( targetWarp - this.warp ) * Math.min( 1, dt * 1.5 );
 			if ( this.buffs.boost > 0 ) s.vy += 25 * dt;
+			// afterburner: SHIFT / E spends a charge
+			if ( bag && s.charges > 0 && s.burstT <= 0 && ! s.popped ) this.afterburner();
 			const onBarge = Math.abs( s.x - BARGE.x ) < 18;
 			const ground = onBarge ? BARGE.deckY + this.app.island.barge.position.y : Math.max( 0, islandHeight( s.x, 0 ) );
 			const total = dt * this.warp;
@@ -1005,6 +1132,8 @@ export class Game {
 
 		}
 
+		// Tailwind: propellant lasts longer
+		if ( r.event && r.event.fuelMul && s.burning && s.fuel > 0 ) s.fuel = Math.min( st.fuel, s.fuel + dt * ( 1 - r.event.fuelMul ) );
 		const h = this.realH();
 		r.maxH = Math.max( r.maxH, h );
 		const speed = isShip( v ) ? s.v : Math.hypot( s.vx, s.vy );
@@ -1035,7 +1164,7 @@ export class Game {
 			h, local, night: this.app.timeOfDay === 'night' || this.app.timeOfDay === 'dawn',
 			hRate: Math.max( 1, ( isShip( v ) ? s.v : Math.abs( s.vy ) ) / Math.max( 1, Math.abs( this.lp.vy ) ) ),
 			localSpeed: Math.abs( this.lp.vy ),
-			ship: isShip( v ), vehicle: v,
+			ship: isShip( v ), vehicle: v, event: r.event,
 		};
 		if ( this.warp < 1.5 ) this.hazards.spawnAhead( this.lp, view, ctx );
 		// the line of the best height ahead (balloon and rocket)
@@ -1102,6 +1231,7 @@ export class Game {
 
 			this.ui.zoneBanner( z, fresh );
 			this.sound.play( fresh ? 'zoneNew' : 'zone' );
+			if ( fresh ) this.chromaPulse = 0.5;
 			if ( fresh ) this.checkAchievements( r );
 
 		}
@@ -1110,6 +1240,8 @@ export class Game {
 		if ( ! r.recordBroken && best > 50 && h > best ) {
 
 			r.recordBroken = true;
+			if ( this.model.cheer ) this.model.cheer( 2.5 );
+			this.chromaPulse = 0.5;
 			this.ui.toast( 'NEW RECORD!', 2.5, 'record' );
 			this.sound.play( 'record' );
 			this.particles.confetti( this.lp.x, this.lp.y + m.height * 0.8, 80 );
@@ -1151,6 +1283,7 @@ export class Game {
 					if ( r.endReason === 'splash' ) {
 
 						this.sound.play( 'splash' );
+						this.app.post.params.droplets.value = 1;
 						this.particles.burst( 40, { soft: true, x: this.lp.x, y: 0.5, speed: 12, life: 1.4, size: 1.2, grow: 1.5, color: [ 0.9, 0.95, 1 ], alpha: 0.9, gravity: - 14, drag: 0.8 } );
 
 					}
@@ -1214,6 +1347,172 @@ export class Game {
 
 			lp.vx = s.vx;
 			lp.x = s.x - app.originX;
+
+		}
+
+	}
+
+	// life on the sea near the camera: spray off the breaking waves, a whale now and then
+	updateSea( dt ) {
+
+		const app = this.app, P = this.particles;
+		const low = this.mode !== 'space' && app.worldVisible && app.camera.position.y + app.originY < 450;
+		if ( low && dt > 0 ) {
+
+			// spray where the crests are breaking (the same waves as the ocean shader's)
+			const t = G.time.value, cam = app.camera;
+			for ( let i = 0; i < 26; i ++ ) {
+
+				const x = cam.position.x + app.originX + ( Math.random() * 2 - 1 ) * 170;
+				const z = cam.position.z + 40 - Math.random() * 280;
+				const d = - islandHeight( x, z );
+				if ( d < 0.9 || d > 2.7 ) continue;
+				const wob = Math.sin( x * 0.011 + z * 0.007 ) * 2.6 + Math.sin( x * 0.031 - z * 0.023 ) * 1.1;
+				const ph = ( d * 0.85 + t * 0.9 + wob ) / 6.2832;
+				const w = ph - Math.floor( ph );
+				if ( w < 0.73 || w > 0.79 ) continue;
+				P.emit( { soft: true, x: x - app.originX, y: 0.6 - app.originY, z, vx: ( Math.random() - 0.5 ) * 2, vy: 3 + Math.random() * 4, vz: 1.5 + Math.random() * 2, life: 1.1 + Math.random() * 0.6, size: 0.9, grow: 3, color: [ 0.95, 0.97, 1 ], alpha: 0.45, gravity: - 5, drag: 0.8 } );
+
+			}
+
+		}
+
+		// the whale: a spout, then a breach and a big splash
+		const wr = this.whaleRun;
+		if ( ! wr ) {
+
+			this.whaleT -= dt;
+			if ( this.whaleT <= 0 && low ) {
+
+				const x = 90 + Math.random() * 300, z = - 60 + Math.random() * 150;
+				if ( - islandHeight( x, z ) > 9 ) this.whaleRun = { x, z, t: 0, dir: Math.random() < 0.5 ? 1 : - 1 };
+				this.whaleT = 35 + Math.random() * 40;
+
+			}
+
+			return;
+
+		}
+
+		wr.t += dt;
+		const w = this.whale;
+		const X = wr.x - app.originX, Y0 = - app.originY;
+		if ( wr.t < 2.2 ) {
+
+			// the spout before it dives
+			if ( wr.t < 1.4 && Math.random() < 0.9 ) P.emit( { soft: true, x: X + ( Math.random() - 0.5 ), y: Y0 + 1, z: wr.z, vx: ( Math.random() - 0.5 ) * 2, vy: 9 + Math.random() * 4, life: 1.4, size: 0.8, grow: 2.5, color: [ 0.95, 0.97, 1 ], alpha: 0.5, gravity: - 6, drag: 0.6 } );
+			w.visible = false;
+
+		} else if ( wr.t < 5.2 ) {
+
+			// the breach: up out of the sea, a twist, and back down
+			const k = ( wr.t - 2.2 ) / 3;
+			w.visible = true;
+			w.position.set( X + wr.dir * ( k - 0.5 ) * 16, Y0 - 7 + Math.sin( k * Math.PI ) * 15, wr.z );
+			// nose up out of the water, a slow roll onto its back, a nose-down fall
+			w.rotation.set( k * 2.2, wr.dir > 0 ? 0 : Math.PI, 1.25 - k * 2.4 );
+			if ( ! wr.out && k > 0.12 ) {
+
+				wr.out = true;
+				this.whaleSplash( X - wr.dir * 5, Y0, wr.z, 70 );
+
+			}
+
+			if ( ! wr.in && k > 0.85 ) {
+
+				wr.in = true;
+				this.whaleSplash( X + wr.dir * 6, Y0, wr.z, 160 );
+
+			}
+
+		} else {
+
+			w.visible = false;
+			this.whaleRun = null;
+
+		}
+
+	}
+
+	whaleSplash( x, y, z, n ) {
+
+		for ( let i = 0; i < n; i ++ ) {
+
+			// a white column up the middle, a crown thrown out around it, mist hanging over the top
+			const a = Math.random() * Math.PI * 2, r = Math.random(), sp = 2 + r * 10;
+			this.particles.emit( { soft: true, x: x + Math.cos( a ) * 4 * r, y: y + 0.5, z: z + Math.sin( a ) * 4 * r, vx: Math.cos( a ) * sp, vy: 5 + ( 1 - r ) * 16 + Math.random() * 5, vz: Math.sin( a ) * sp, life: 1.8 + Math.random() * 1.2, size: 1.4 + Math.random(), grow: 3.5, color: [ 0.95, 0.97, 1 ], alpha: 0.6, gravity: - 11, drag: 0.5 } );
+
+		}
+
+		if ( Math.hypot( this.app.camera.position.x - x, this.app.camera.position.z - z ) < 700 ) this.sound.play( 'splash' );
+
+	}
+
+	// fireworks over the pad and a cheering crowd
+	celebrate( n = 6 ) {
+
+		this.app.island.cheer( 5 );
+		if ( this.model.cheer ) this.model.cheer( 3 );
+		const cols = [ [ 12, 4, 3 ], [ 4, 8, 14 ], [ 12, 10, 3 ], [ 5, 12, 5 ], [ 11, 5, 13 ], [ 14, 14, 14 ] ];
+		for ( let i = 0; i < n; i ++ ) {
+
+			this.fireworks.push( { x: this.lp.x + ( Math.random() - 0.5 ) * 60, y: this.lp.y + 2, z: - 20 - Math.random() * 40, vy: 38 + Math.random() * 14, t: - i * 0.45 - Math.random() * 0.3, fuse: 1.2 + Math.random() * 0.5, color: cols[ Math.floor( Math.random() * cols.length ) ] } );
+
+		}
+
+	}
+
+	updateFireworks( dt ) {
+
+		const P = this.particles;
+		this.fireworks = this.fireworks.filter( ( f ) => {
+
+			f.t += dt;
+			if ( f.t < 0 ) return true;
+			if ( ! f.lit ) {
+
+				f.lit = true;
+				this.sound.play( 'whoosh' );
+
+			}
+
+			f.vy -= 14 * dt;
+			f.y += f.vy * dt;
+			P.emit( { x: f.x, y: f.y, z: f.z, vy: - 4, life: 0.5, size: 0.35, color: [ 10, 7, 3 ], drag: 1 } );
+			if ( f.t < f.fuse ) return true;
+			// burst: a sphere of sparks, a flash of glitter
+			for ( let i = 0; i < 70; i ++ ) {
+
+				const u = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, r = Math.sqrt( 1 - u * u );
+				const sp = 16 + Math.random() * 6;
+				P.emit( { x: f.x, y: f.y, z: f.z, vx: r * Math.cos( a ) * sp, vy: u * sp, vz: r * Math.sin( a ) * sp, life: 1.4 + Math.random() * 0.6, size: 0.5, color: f.color, gravity: - 6, drag: 1.4, fade: 0.8 } );
+
+			}
+
+			this.sound.play( 'firework' );
+			return false;
+
+		} );
+
+	}
+
+	// SHIFT in the rocket: a blast of extra thrust
+	afterburner() {
+
+		const s = this.s, r = this.run;
+		s.charges --;
+		s.burstT = AFTERBURNER_TIME;
+		r.afterburns = ( r.afterburns || 0 ) + 1;
+		this.shake = Math.max( this.shake, 0.8 );
+		this.chromaPulse = 0.45;
+		this.sound.play( 'boost' );
+		this.sound.play( 'boom' );
+		this.ui.toast( 'AFTERBURNER!', 1.1, 'record' );
+		const y = this.lp.y - 1;
+		for ( let i = 0; i < 36; i ++ ) {
+
+			const a = i / 36 * Math.PI * 2;
+			this.particles.emit( { soft: true, x: this.lp.x + Math.cos( a ) * 2, y, z: Math.sin( a ) * 2, vx: Math.cos( a ) * 26, vy: - 6, vz: Math.sin( a ) * 26, life: 1.2, size: 2, grow: 3, color: [ 0.92, 0.92, 0.95 ], alpha: 0.6, drag: 2.5 } );
 
 		}
 
@@ -1313,7 +1612,7 @@ export class Game {
 		const r = this.run;
 		r.nearMisses ++;
 		this.hitstop = Math.max( this.hitstop, 0.05 );
-		const bonus = zoneAt( this.realH() ).coin * 4;
+		const bonus = zoneAt( this.realH() ).coin * 4 * ( ( r.event && r.event.nearMul ) || 1 );
 		r.coins += bonus;
 		this.ui.toast( `Close call! +${ fmtMoney( bonus ) }`, 1.1, 'good' );
 		this.sound.play( 'whoosh' );
@@ -1333,7 +1632,7 @@ export class Game {
 				r.combo = r.time - r.lastCoin < 1.4 ? r.combo + 1 : 1;
 				r.lastCoin = r.time;
 				r.bestCombo = Math.max( r.bestCombo, r.combo );
-				const mult = r.combo >= 50 ? 3 : r.combo >= 25 ? 2 : r.combo >= 10 ? 1.5 : 1;
+				const mult = ( r.combo >= 50 ? 3 : r.combo >= 25 ? 2 : r.combo >= 10 ? 1.5 : 1 ) * ( ( r.event && r.event.coinMul ) || 1 );
 				p.value = Math.round( p.value * mult );
 				r.coins += p.value; r.coinCount ++;
 				this.sound.play( 'coin', Math.min( 12, r.combo ) );
@@ -1384,6 +1683,7 @@ export class Game {
 				this.ui.toast( `Lost probe recovered! +${ fmtMoney( p.value ) }`, 2, 'good' );
 				break;
 			case 'crystal':
+				p.value *= ( r.event && r.event.specialMul ) || 1;
 				r.coins += p.value; r.crystals ++; S.crystals ++;
 				this.sound.play( 'star' );
 				burst( [ [ 1, 5, 7 ] ], 20 );
@@ -1409,6 +1709,7 @@ export class Game {
 					r.coins += bonus;
 					r.chains = ( r.chains || 0 ) + 1;
 					this.hitstop = Math.max( this.hitstop, 0.08 );
+					this.chromaPulse = 0.6;
 					if ( st.jumps > 0 && s.jumps < st.jumps ) s.jumps ++;
 					this.ui.toast( `PERFECT CHAIN! +${ fmtMoney( bonus ) }${ st.jumps > 0 ? ' · +1 jump' : '' }`, 1.8, 'record' );
 					this.sound.play( 'chain' );
@@ -1452,15 +1753,58 @@ export class Game {
 		if ( this.vehicle === 'balloon' ) m.update( s, dt, extra );
 		else m.update( { ...s, x: this.lp.x, lx: this.lp.x }, dt, { ...extra, visualY: this.lp.y } );
 		m.group.visible = ! ( this.invuln > 0 && Math.floor( this.time * 20 ) % 2 === 0 && flying );
-		this.app.post.params.damage.value = this.hitFlash * 0.8;
+		const pp = this.app.post.params;
+		pp.damage.value = this.hitFlash * 0.8;
+		// speed lines and chromatic pulses: raw speed, turbo, hyperjumps, big moments
+		let spd = 0;
+		const v = this.vehicle;
+		if ( flying || this.state === 'jump' ) {
+
+			if ( v === 'rocket' ) spd = MathUtils.clamp( ( Math.abs( s.vy ) - 250 ) / 1200, 0, 0.7 );
+			else if ( isShip( v ) ) spd = 0.2 + ( this.jumpFx || 0 ) * 0.9 + ( this.state === 'jump' ? 0.7 : 0 );
+			if ( this.buffs.boost > 0 ) spd = Math.max( spd, 0.55 );
+
+		}
+
+		pp.speed.value += ( spd - pp.speed.value ) * Math.min( 1, dt * 4 );
+		this.chromaPulse = Math.max( 0, ( this.chromaPulse || 0 ) - dt * 1.8 );
+		pp.chroma.value = Math.max( this.hitFlash * 0.7, ( this.jumpFx || 0 ) * 0.9, this.chromaPulse, this.state === 'jump' ? 0.6 : 0 );
 
 	}
 
 	updateEffects( dt ) {
 
-		if ( dt <= 0 ) return;
 		const P = this.particles, s = this.s, v = this.vehicle, m = this.model, lp = this.lp;
 		const burning = s.burning && ! s.popped;
+		// the engine light follows the flame
+		const el = this.engineLight;
+		const lit = burning || ( v === 'rocket' && s.boosterLit && s.boosters );
+		this.engineGlow = ( this.engineGlow || 0 ) + ( ( lit ? 1 : isShip( v ) ? 0.15 : 0 ) - ( this.engineGlow || 0 ) ) * Math.min( 1, dt * 12 );
+		if ( v === 'balloon' ) {
+
+			el.position.set( lp.x, lp.y + ( m.basketTop || 2 ) + 2.4, 0 );
+			el.color = [ 1, 0.62, 0.28 ];
+			el.intensity = 70 * this.engineGlow;
+			el.range = 18;
+
+		} else if ( v === 'rocket' ) {
+
+			el.position.set( lp.x, lp.y - 2.5, 0 );
+			el.color = s.burstT > 0 ? [ 0.75, 0.8, 1 ] : [ 1, 0.55, 0.22 ];
+			el.intensity = ( s.burstT > 0 ? 2600 : 1400 ) * this.engineGlow;
+			el.range = 80;
+
+		} else {
+
+			const dc = m.driveColor || [ 0.4, 0.7, 1 ];
+			el.position.set( lp.x, lp.y - 2, 0 );
+			el.color = dc;
+			el.intensity = 700 * this.engineGlow;
+			el.range = 50;
+
+		}
+
+		if ( dt <= 0 ) return;
 		if ( v === 'balloon' ) {
 
 			if ( burning && Math.random() < 0.6 ) P.emit( { x: lp.x + ( Math.random() - 0.5 ) * 0.4, y: lp.y + m.basketTop + 2.2, z: 0, vy: 6 + Math.random() * 4, vx: ( Math.random() - 0.5 ) * 2, life: 0.5, size: 0.25, color: [ 12, 6, 1.5 ], drag: 1 } );
@@ -1471,7 +1815,9 @@ export class Game {
 			const pts = m.exhaustPoints( { ...s, lx: lp.x }, lp.y );
 			// the world moves by ( lp.vy - s.vy ) in drawn coordinates: smoke stays where it was puffed
 			const frameVy = lp.vy - s.vy;
-			const lit = burning || ( s.boosterLit && s.boosters );
+			const lit = burning || ( s.boosterLit && s.boosters ) || s.burstT > 0;
+			// the afterburner's blue-white core and shock diamonds
+			if ( s.burstT > 0 ) for ( const p of pts ) for ( let i = 0; i < 3; i ++ ) P.emit( { x: p.x + ( Math.random() - 0.5 ) * 0.4, y: p.y - 1 - i * 2.2, z: ( Math.random() - 0.5 ) * 0.4, vx: p.dx * 40, vy: p.dy * 55 + frameVy * 0.1, life: 0.12, size: 1.6 - i * 0.3, grow: 0.5, color: [ 8, 10, 16 ], drag: 1 } );
 			if ( lit ) {
 
 				for ( const p of pts ) {
@@ -1832,7 +2178,12 @@ export class Game {
 		const cy = cam.position.y + app.originY;
 		const inLayer = MathUtils.smoothstep( cy, 1450, 1800 ) * ( 1 - MathUtils.smoothstep( cy, 4200, 4900 ) );
 		const puff = 0.5 + 0.5 * Math.sin( cy * 0.004 + Math.sin( cam.position.x * 0.002 ) * 3 );
-		app.post.params.cloudFog.value = this.mode === 'space' ? 0 : inLayer * MathUtils.smoothstep( puff, 0.35, 0.9 ) * 0.55;
+		const fogNow = this.mode === 'space' ? 0 : inLayer * MathUtils.smoothstep( puff, 0.35, 0.9 ) * 0.55;
+		app.post.params.cloudFog.value = fogNow;
+		// out of a cloud: water on the lens for a few seconds
+		if ( this.inCloudFog && fogNow < 0.05 ) app.post.params.droplets.value = 1;
+		this.inCloudFog = fogNow > 0.25 || ( this.inCloudFog && fogNow > 0.05 );
+		app.post.params.droplets.value = Math.max( 0, app.post.params.droplets.value - dt * 0.28 );
 
 	}
 

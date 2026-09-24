@@ -2,8 +2,9 @@ import { Mesh } from '../engine/scene/Mesh.js';
 import { BufferGeometry, Float32BufferAttribute } from '../engine/geometry/index.js';
 import { Material } from '../engine/render/Material.js';
 import { UniformBlock, ShaderModule } from '../engine/gpu/Shader.js';
-import { Vector2 } from '../engine/math/index.js';
+import { Vector2, Vector4 } from '../engine/math/index.js';
 import { islandModule } from '../world/Island.js';
+import { localLightsCoreModule } from '../world/LocalLights.js';
 
 // The sea: a polar grid centred under the camera (fine rings near it, geometric growth out to the
 // horizon, several hundred km so it still reaches the horizon from the stratosphere), displaced by
@@ -69,19 +70,34 @@ function polarGrid() {
 }
 
 // breaking waves over the shelf: crests follow the depth contours and roll in toward the beach,
-// steepening as the water shoals; vec3( height, foam, shoaling ) at real xz for depth d (m)
+// steepening as the water shoals; sections of the crest stand taller and break first (the break
+// peels along the wave), leaving tumbling whitewater; after each wave a sheet of water runs up the
+// sand and drains back. vec4( height, whitewater, shoaling, run-up height ) at real xz, depth d (m).
+// (sin-based wobble: Game.js computes the same crests in JS for the spray)
 const SHORE_WGSL = /* wgsl */`
-fn oceanShoreWave( xz: vec2f, d: f32, t: f32 ) -> vec3f {
-	let zone = smoothstep( 10.0, 3.5, d ) * smoothstep( -0.3, 0.9, d );
-	if ( zone <= 0.0 ) { return vec3f( 0.0 ); }
-	let wobble = islandNoise( xz * 0.012 ) * 5.0 + islandNoise( xz * 0.05 ) * 1.2;
-	let phase = d * 0.85 + t * 0.9 + wobble;
+fn oceanShoreWobble( xz: vec2f ) -> f32 {
+	return sin( xz.x * 0.011 + xz.y * 0.007 ) * 2.6 + sin( xz.x * 0.031 - xz.y * 0.023 ) * 1.1;
+}
+fn oceanShoreWave( xz: vec2f, d: f32, t: f32 ) -> vec4f {
+	let wob = oceanShoreWobble( xz );
+	let phase = d * 0.85 + t * 0.9 + wob;
 	let w = fract( phase / 6.2832 );
-	// a sharp front face, a long gentle back
-	let crest = pow( smoothstep( 0.0, 0.75, w ) * smoothstep( 1.0, 0.8, w ), 2.2 );
-	let amp = zone * mix( 0.35, 1.0, smoothstep( 8.0, 2.5, d ) );
-	let breaking = smoothstep( 2.6, 1.2, d );
-	return vec3f( crest * amp * mix( 1.0, 0.45, breaking ), crest * breaking * zone, amp );
+	let zone = smoothstep( 10.0, 3.5, d ) * smoothstep( -0.3, 0.9, d );
+	var h = 0.0;
+	var white = 0.0;
+	var amp = 0.0;
+	if ( zone > 0.0 ) {
+		let crest = pow( smoothstep( 0.0, 0.75, w ) * smoothstep( 1.0, 0.8, w ), 2.2 );
+		let shoulder = 0.65 + 0.35 * sin( dot( xz, vec2f( 0.021, -0.017 ) ) + phase * 0.35 );
+		amp = zone * mix( 0.35, 1.0, smoothstep( 8.0, 2.5, d ) ) * shoulder;
+		let breaking = smoothstep( 2.4 * shoulder + 0.6, 1.0, d );
+		h = crest * amp * mix( 1.0, 0.45, breaking );
+		let tumble = smoothstep( 0.45, 0.74, w ) * smoothstep( 0.82, 0.75, w );
+		white = ( crest * 0.8 + tumble * 0.9 ) * breaking * zone;
+	}
+	let runW = fract( ( t * 0.9 + wob ) / 6.2832 + 0.12 );
+	let runup = 0.42 * smoothstep( 0.0, 0.12, runW ) * smoothstep( 0.75, 0.12, runW );
+	return vec4f( h, white, amp, runup );
 }
 `;
 
@@ -99,14 +115,17 @@ export class Ocean {
 			// displacement fades out between these distances (m)
 			fadeNear: [ 'f32', 600 ],
 			fadeFar: [ 'f32', 2600 ],
+			// boats for their wakes: real x, z, heading (rad), speed (m/s; 0: none)
+			boats: [ 'vec4f[4]', [ 0, 1, 2, 3 ].map( () => new Vector4() ) ],
 		}, { label: 'oceanSurface' } );
 
 		this.material = new Material( {
 			name: 'ocean',
 			lit: false,
-			modules: [ fft.module, sky.module, islandModule, shoreModule, sky.clouds && sky.clouds.shadowModule ].filter( Boolean ),
+			modules: [ fft.module, sky.module, islandModule, shoreModule, localLightsCoreModule, sky.clouds && sky.clouds.shadowModule ].filter( Boolean ),
 			bindings: { os: { uniform: this.params } },
 			varyings: { vDisp: 'vec4f', vShore: 'vec2f' },
+			side: 'double',
 			defines: { IS_WATER: 1 },
 			vertex: /* wgsl */`
 	let local = v.position.xz;
@@ -119,7 +138,7 @@ export class Ocean {
 	var d = vec3f( 0.0 );
 	var foam = 0.0;
 	let depth = - islandHeight( xz );
-	var shore = vec3f( 0.0 );
+	var shore = vec4f( 0.0 );
 	if ( fade > 0.0 ) {
 		let lod = log2( max( camDist / 60.0, 1.0 ) );
 		for ( var c = 0; c < OCEAN_CASCADES; c++ ) {
@@ -131,12 +150,14 @@ export class Ocean {
 		// calmer in the shallows (the waves feel the bottom) and flat on the beach
 		d *= mix( 0.3, 1.0, smoothstep( 0.0, 7.0, depth ) );
 		// breaking waves rolling in over the shelf, pushed toward the beach at the crest
-		if ( depth < 11.0 && depth > -0.5 ) {
+		if ( depth < 11.0 && depth > -2.0 ) {
 			shore = oceanShoreWave( xz, depth, frame.time );
 			let e = 1.5;
 			let up = vec2f( islandHeight( xz + vec2f( e, 0.0 ) ) - islandHeight( xz - vec2f( e, 0.0 ) ), islandHeight( xz + vec2f( 0.0, e ) ) - islandHeight( xz - vec2f( 0.0, e ) ) );
 			let upN = up / max( length( up ), 1e-4 );
 			d += vec3f( upN.x * shore.x * 0.7, shore.x, upN.y * shore.x * 0.7 );
+			// the swash: the water's edge surges up the sand and drains back
+			d.y += shore.w * smoothstep( 1.4, 0.2, depth );
 		}
 		d *= fade;
 	}
@@ -146,7 +167,7 @@ export class Ocean {
 	v.worldPos = vec3f( xzDrawn.x + d.x, frame.seaLevel + d.y - drop, xzDrawn.y + d.z );
 	v.worldNormal = vec3f( 0.0, 1.0, 0.0 );
 	o.vDisp = vec4f( xz, foam * fade, d.y );
-	o.vShore = vec2f( shore.y * fade, shore.z );
+	o.vShore = vec2f( shore.y * fade, shore.w );
 `,
 			surface: /* wgsl */`
 	let xz = in.vs.vDisp.xy;
@@ -168,6 +189,8 @@ export class Ocean {
 	var N = normalize( vec3f( - sx / ( 1.0 + jx ) * calm * ( 1.0 - far ), 1.0, - sz / ( 1.0 + jz ) * calm * ( 1.0 - far ) ) );
 	// the breaking waves' faces (screen-space slope of their height; derivatives in uniform control flow)
 	let sw = oceanShoreWave( xz, depth, t ).x;
+	// the sheet of water over the sand: how thick it is here (0 at the running edge)
+	let thickness = ( P.y - frame.seaLevel ) - islandHeight( xz );
 	let dx = dpdx( sw ); let dy = dpdy( sw );
 	let px = dpdx( xz ); let py = dpdy( xz );
 	let det = px.x * py.y - px.y * py.x;
@@ -278,7 +301,8 @@ ${ sky.clouds ? '	sunLight *= cloudsShadow( xz );' : '' }
 	let crestH = sat( in.vs.vDisp.w * 0.7 + 0.15 ) * ( sat( ( 1.0 - N.y ) * 4.0 ) + 0.25 );
 	let sss = sunLight * vec3f( 0.12, 0.55, 0.45 ) * 0.07 * back * crestH * smoothstep( 0.0, 0.25, L.y );
 	let transmitted = bedCol * Tview + inSun + inAmb + sss;
-	var col = mix( transmitted, refl, F ) + spec;
+	// the lamps', the lighthouse's and the engines' glints on the water
+	var col = mix( transmitted, refl, F ) + spec + localLightsSpecular( P, N, V, 0.12 + sqrt( mss * unresolved ) );
 
 	// ---- foam: whitecaps, the breaking surf, the swash line on the beach, bubbly and patchy
 	let foamFFT = smoothstep( 0.45, 1.1, in.vs.vDisp.z ) * ( 1.0 - far );
@@ -287,12 +311,51 @@ ${ sky.clouds ? '	sunLight *= cloudsShadow( xz );' : '' }
 	let surf = smoothstep( 0.05, 0.6, in.vs.vShore.x ) * mix( 0.55, 1.0, lace );
 	// behind the breakers a trail of bubbles fades out
 	let trail = smoothstep( 3.0, 1.0, depth ) * smoothstep( -0.3, 0.6, depth ) * lace * 0.45;
-	let swBand = smoothstep( 0.7, 0.05, depth ) * smoothstep( -0.35, 0.05, depth );
-	let swash = sin( depth * 7.0 - t * 1.3 + islandNoise( xz * 0.05 ) * 6.0 );
-	let swashFoam = swBand * smoothstep( 0.2, 0.95, swash ) * mix( 0.5, 1.0, bub ) * 0.9;
-	let foam = sat( foamFFT + surf + trail + swashFoam );
+	// a bubbly bead along the running edge of the swash, thinning lace behind it
+	let nearShore = smoothstep( 1.2, 0.3, depth );
+	let bead = smoothstep( 0.14, 0.02, thickness ) * nearShore * mix( 0.55, 1.0, bub );
+	let sheet = smoothstep( 0.4, 0.1, thickness ) * nearShore * lace * 0.45;
+	// wind streaks: foam combed into long lines down the wind
+	let wd = frame.windDir;
+	let along = dot( xz, wd );
+	let across = dot( xz, vec2f( -wd.y, wd.x ) );
+	let stn = islandNoise( vec2f( along * 0.01 - t * 0.06, across * 0.55 ) ) * 0.7 + islandNoise( vec2f( along * 0.04, across * 1.3 ) ) * 0.3;
+	let windPatch = smoothstep( 0.42, 0.72, islandNoise( xz * 0.0035 + vec2f( t * 0.012, 0.0 ) ) );
+	let streaks = smoothstep( 0.66, 0.86, stn ) * 0.26 * windPatch * ( 1.0 - smoothstep( 300.0, 2000.0, dist ) ) * smoothstep( 4.0, 14.0, depth );
+	// boat wakes: the Kelvin wedge, a churned trail and a bow wave
+	var wake = 0.0;
+	for ( var i = 0; i < 4; i++ ) {
+		let b = os.boats[ i ];
+		if ( b.w <= 0.0 ) { continue; }
+		let fw = vec2f( cos( b.z ), sin( b.z ) );
+		let rel = xz - b.xy;
+		let back = - dot( rel, fw );
+		let side = abs( dot( rel, vec2f( -fw.y, fw.x ) ) );
+		if ( back > -8.0 && back < 170.0 ) {
+			let arm = exp( - pow( ( side - back * 0.36 ) / ( 0.5 + back * 0.025 ), 2.0 ) ) * smoothstep( -2.0, 4.0, back ) * exp( - back / 70.0 );
+			let mid = exp( - pow( side / ( 0.8 + back * 0.035 ), 2.0 ) ) * smoothstep( 0.0, 3.0, back ) * exp( - back / 30.0 );
+			let bow = exp( - ( pow( back + 4.5, 2.0 ) + side * side ) / 5.0 );
+			wake += ( arm * 0.75 + mid * 0.8 + bow ) * ( 0.35 + lace * 0.8 ) * smoothstep( 0.5, 4.0, b.w );
+		}
+	}
+	let foam = sat( foamFFT + surf + trail + bead + sheet + streaks + wake );
 	let foamLit = ( sunLight * ( sat( dot( N, L ) ) * 0.75 + 0.25 ) * INV_PI + frame.skyIrradiance * 0.95 ) * 0.85;
 	col = mix( col, foamLit + spec * 0.05, foam );
+
+	// seen from below (the camera under the sea): Snell's window of the sky overhead, total internal
+	// reflection of the dim blue water outside it, fading into the water's own colour with distance
+	if ( ! in.front ) {
+		let dirU = -V;
+		let Nw = -N;
+		let Tt = refract( dirU, Nw, 1.333 );
+		let deepU = frame.skyIrradiance * vec3f( 0.03, 0.14, 0.16 ) + frame.sunColor * vec3f( 0.002, 0.014, 0.016 );
+		var under = deepU;
+		if ( dot( Tt, Tt ) > 0.5 ) {
+			let Fu = 0.02 + 0.98 * pow5( 1.0 - sat( dot( V, -Nw ) ) );
+			under = mix( skyRadianceWithClouds( normalize( Tt ), true ) * vec3f( 0.7, 0.9, 0.95 ), deepU, Fu );
+		}
+		col = mix( deepU, under, exp( - dist * 0.05 ) );
+	}
 
 	// seen from high up the sea becomes the planet: blend into the sky's ground shading (the same
 	// function renders the Earth past the edge of this mesh and from orbit)

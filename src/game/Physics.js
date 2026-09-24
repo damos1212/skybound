@@ -137,13 +137,16 @@ export function gravityAt( y ) {
 
 }
 
+export const AFTERBURNER_THRUST = 55;
+export const AFTERBURNER_TIME = 2.2;
+
 export function createRocketState( stats ) {
 
 	return {
 		x: 0, y: 0, vx: 0, vy: 0, angle: 0,
 		fuel: stats.fuel, boosterFuel: stats.boosterTime, boosters: stats.boosters > 0, boosterLit: false, separated: false,
 		hull: stats.hull, leak: 0, burning: false, popped: false, grounded: true, time: 0, maxY: 0, kick: 0, bags: 0,
-		throttle: 0,
+		throttle: 0, charges: stats.afterburners || 0, burstT: 0,
 	};
 
 }
@@ -173,6 +176,14 @@ export function stepRocket( s, stats, input, dt, groundY = 0 ) {
 			s.separated = true;
 
 		}
+
+	}
+
+	// afterburner: a charge of extra thrust that needs no propellant
+	if ( s.burstT > 0 && ! s.popped ) {
+
+		thrust += AFTERBURNER_THRUST;
+		s.burstT = Math.max( 0, s.burstT - dt );
 
 	}
 

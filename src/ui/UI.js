@@ -123,6 +123,7 @@ export class UI {
 				<div class="garage" data-bind="garage"></div>
 				<div class="missions" data-bind="missions"></div>
 			</div>
+			<div class="event-pill hidden" data-bind="eventPill"></div>
 			<div class="menu">
 				<button class="btn big primary" data-act="launch">LAUNCH <kbd>Space</kbd></button>
 				<button class="btn big" data-act="shop">WORKSHOP <kbd>U</kbd></button>
@@ -223,13 +224,21 @@ export class UI {
 				<div class="res-title" data-bind="rtitle"></div>
 				<div class="res-sub" data-bind="rsub"></div>
 				<div class="res-alt"><span data-bind="ralt"></span><span class="badge hidden" data-bind="rbadge">NEW RECORD</span></div>
+				<div class="res-fact" data-bind="rfact"></div>
 				<div class="res-lines" data-bind="rlines"></div>
 				<div class="res-ach" data-bind="rach"></div>
 				<div class="res-total"><span>Total</span><span data-bind="rtotal"></span></div>
+				<div class="res-ready hidden" data-bind="rready"></div>
 				<button class="btn big primary" data-act="continue">Continue <kbd>Space</kbd></button>
+				<div class="res-more">
+					<button class="btn" data-act="again">Fly again <kbd>R</kbd></button>
+					<button class="btn" data-act="toshop">Workshop <kbd>U</kbd></button>
+				</div>
 			</div>
 		`;
 		click( r.querySelector( '[data-act=continue]' ), () => g.returnToPad() );
+		click( r.querySelector( '[data-act=again]' ), () => g.returnToPad( 'launch' ) );
+		click( r.querySelector( '[data-act=toshop]' ), () => g.returnToPad( 'shop' ) );
 		root.appendChild( r );
 
 		// ---------------- modal
@@ -292,6 +301,7 @@ export class UI {
 		if ( name === 'shop' ) this.renderShop();
 		if ( name === 'hangar' ) {
 
+			this.renderEvent();
 			this.renderLadder();
 			this.renderGarage();
 			this.renderTimeOfDay();
@@ -354,6 +364,27 @@ export class UI {
 				<div class="m-text">${ m.text }</div>
 				<div class="m-row"><div class="m-bar"><div style="width:${ Math.min( 100, ( m.progress || 0 ) / m.target * 100 ).toFixed( 0 ) }%"></div></div><span class="m-reward">${ formatMoney( m.reward ) }</span></div>
 			</div>` ).join( '' );
+
+	}
+
+	renderEvent() {
+
+		const e = this.game.nextEvent;
+		for ( const n of this.binds.eventPill ) {
+
+			n.classList.toggle( 'hidden', ! e );
+			if ( e ) n.innerHTML = `<span class="ep-k">Next run</span><span class="ep-i">${ e.icon }</span><b>${ e.name }</b><span class="ep-d">${ e.desc }</span>`;
+
+		}
+
+	}
+
+	eventBanner( e ) {
+
+		const b = el( 'div', 'event-banner', `<div class="eb-k">Sky event</div><div class="eb-n">${ e.icon } ${ e.name }</div><div class="eb-d">${ e.desc }</div>` );
+		this.root.appendChild( b );
+		setTimeout( () => b.classList.add( 'out' ), 3200 );
+		setTimeout( () => b.remove(), 3800 );
 
 	}
 
@@ -466,7 +497,7 @@ export class UI {
 		const st = g.stats();
 		let html = '';
 		if ( v === 'balloon' ) html = `<span><b>${ ( st.lift / 9.81 ).toFixed( 2 ) }g</b> lift</span><span><b>${ st.fuel }s</b> fuel</span><span><b>${ st.hull }</b> hull</span><span><b>${ st.fan }</b> steer</span>`;
-		else if ( v === 'rocket' ) html = `<span><b>${ ( st.thrust / 9.81 ).toFixed( 1 ) }g</b> thrust</span><span><b>${ st.fuel }s</b> burn</span><span><b>${ st.boosters }</b> boosters</span><span><b>${ st.hull }</b> hull</span>`;
+		else if ( v === 'rocket' ) html = `<span><b>${ ( st.thrust / 9.81 ).toFixed( 1 ) }g</b> thrust</span><span><b>${ st.fuel }s</b> burn</span><span><b>${ st.boosters }</b> boosters</span><span><b>${ st.hull }</b> hull</span>${ st.afterburners ? `<span><b>${ st.afterburners }</b> afterburner${ st.afterburners > 1 ? 's' : '' }</span>` : '' }`;
 		else html = `<span><b>×${ Math.exp( st.boost ).toFixed( 2 ) }</b>/s speed</span><span><b>${ st.fuel }s</b> burn</span><span><b>${ st.hull }</b> hull</span><span><b>${ Math.round( ( 1 - st.heat ) * 100 ) }%</b> ${ v === 'starship' ? 'heat shield' : 'screening' }</span>${ st.jumps ? `<span><b>${ st.jumps }</b> hyperjump${ st.jumps > 1 ? 's' : '' }</span>` : '' }`;
 		this.statRow.innerHTML = html;
 
@@ -515,9 +546,17 @@ export class UI {
 				<label class="set"><span>Sound effects</span><input type="range" min="0" max="1" step="0.05" value="${ g.save.settings.sfx }" data-k="sfx"></label>
 				<div class="set"><span>Graphics</span><div class="seg">${ [ 'low', 'medium', 'high' ].map( ( k ) => `<button class="chip ${ q === k ? 'on' : '' }" data-q="${ k }">${ k[ 0 ].toUpperCase() + k.slice( 1 ) }</button>` ).join( '' ) }</div></div>
 				<div class="set-note">Changing graphics reloads the game (progress is saved).</div>
+				<div class="set"><span>Effects</span><div class="seg">${ [ [ 'rays', 'Light shafts' ], [ 'ao', 'Ambient occlusion' ], [ 'dynres', 'Dynamic resolution' ] ].map( ( [ k, n ] ) => `<button class="chip ${ g.app.gfx[ k ] ? 'on' : '' }" data-gfx="${ k }">${ n }</button>` ).join( '' ) }</div></div>
 				<div class="set danger"><span>Start over</span><button class="btn small" data-act="reset">Reset progress</button></div>
-				<div class="set-note">Controls: Space / hold click to thrust · A D to steer · Shift for a sandbag · Esc to pause · M to mute · 1 2 3 to pick a vehicle · C for photo mode (on the pad, paused or after a run).</div>`;
+				<div class="set-note">Controls: Space / hold click to thrust · A D to steer · Shift for a sandbag (balloon), afterburner (rocket) or hyperjump (Warpship, Ark) · Esc to pause · M to mute · 1–5 to pick a vehicle · C for photo mode (on the pad, paused or after a run).</div>`;
 			for ( const inp of body.querySelectorAll( 'input[type=range]' ) ) inp.addEventListener( 'input', () => g.setVolume( inp.dataset.k, Number( inp.value ) ) );
+			for ( const b of body.querySelectorAll( '[data-gfx]' ) ) this.click( b, () => {
+
+				const k = b.dataset.gfx;
+				g.app.setGfx( k, ! g.app.gfx[ k ] );
+				b.classList.toggle( 'on', g.app.gfx[ k ] );
+
+			} );
 			for ( const b of body.querySelectorAll( '[data-q]' ) ) this.click( b, () => {
 
 				try {
@@ -611,6 +650,7 @@ export class UI {
 		this.set( 'rtitle', title );
 		this.set( 'rsub', sub );
 		this.set( 'ralt', formatAltitude( res.altitude ) );
+		this.set( 'rfact', res.fact || '' );
 		for ( const n of this.binds.rbadge ) n.classList.toggle( 'hidden', ! res.record );
 		const box = this.binds.rlines[ 0 ];
 		box.innerHTML = '';
@@ -625,6 +665,11 @@ export class UI {
 		const ach = this.binds.rach[ 0 ];
 		ach.innerHTML = ( res.achievements || [] ).map( ( a ) => `<div class="res-achv">🏅 ${ a.name } <span>+${ formatMoney( a.reward ) }</span></div>` ).join( '' );
 		this._countUp( this.binds.rtotal[ 0 ], res.total, 0.5 + res.lines.length * 0.12, 1.1 );
+		// what the pay buys: a nudge toward the workshop
+		const n = this.game.affordable();
+		const ready = this.binds.rready[ 0 ];
+		ready.classList.toggle( 'hidden', n === 0 );
+		ready.textContent = n === 1 ? '🔧 1 upgrade ready in the workshop' : `🔧 ${ n } upgrades ready in the workshop`;
 
 	}
 
@@ -795,11 +840,14 @@ export class UI {
 			}
 
 			this.set( 'heatIcon', icon( v === 'rocket' ? 'booster' : isShip( v ) ? 'heatshield' : 'flame', 22 ), true );
-			// hyperjump charges
+			// hyperjump / afterburner charges
 			let jumps = '';
-			if ( st.jumps ) {
+			const maxC = isShip( v ) ? st.jumps : v === 'rocket' ? st.afterburners : 0;
+			if ( maxC ) {
 
-				for ( let i = 0; i < st.jumps; i ++ ) jumps += `<span class="jc ${ i < ( s.jumps || 0 ) ? 'on' : '' } ${ s.jumpT > 0 && i === ( s.jumps || 0 ) ? 'fire' : '' }"></span>`;
+				const have = ( isShip( v ) ? s.jumps : s.charges ) || 0;
+				const firing = ( isShip( v ) ? s.jumpT : s.burstT ) > 0;
+				for ( let i = 0; i < maxC; i ++ ) jumps += `<span class="jc ${ v === 'rocket' ? 'ab' : '' } ${ i < have ? 'on' : '' } ${ firing && i === have ? 'fire' : '' }"></span>`;
 				jumps += '<kbd>Shift</kbd>';
 
 			}

@@ -140,6 +140,7 @@ export const GPU = {
 	// run this frame (compute, post) call ready( handle ), which falls back to a synchronous create.
 	_pending: new Set(),
 	syncCompiles: [], // labels of pipelines needed before their async compile finished (diagnostics)
+	compileTimes: [], // [ label, ms from request to ready ] (diagnostics)
 
 	renderPipeline( desc ) {
 
@@ -162,10 +163,12 @@ export const GPU = {
 
 			if ( h.pipeline ) return;
 			const create = kind === 'render' ? this.device.createRenderPipelineAsync : this.device.createComputePipelineAsync;
+			const t0 = performance.now();
 			return create.call( this.device, desc ).then( ( pipeline ) => {
 
 				if ( ! h.pipeline ) h.pipeline = pipeline;
 				h.desc = null;
+				this.compileTimes.push( [ desc.label, Math.round( performance.now() - t0 ) ] );
 
 			}, ( e ) => {
 

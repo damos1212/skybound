@@ -1,6 +1,7 @@
 import { Mesh } from '../engine/scene/Mesh.js';
 import { InstancedBufferGeometry, InstancedBufferAttribute, Float32BufferAttribute } from '../engine/geometry/index.js';
 import { Material } from '../engine/render/Material.js';
+import { localLightsCoreModule } from '../world/LocalLights.js';
 
 // CPU-simulated billboard particles, drawn as one instanced quad batch per blend mode:
 //   glow (additive): flames, sparks, exhaust cores, star dust
@@ -12,7 +13,7 @@ const MAX = 6000;
 
 class Batch {
 
-	constructor( scene, name, blending ) {
+	constructor( scene, name, blending, lit = false ) {
 
 		this.pos = new Float32Array( MAX * 4 );
 		this.col = new Float32Array( MAX * 4 );
@@ -30,6 +31,7 @@ class Batch {
 		this.material = new Material( {
 			name, lit: false, transparent: true, depthWrite: false, blending, side: 'double',
 			velocityWeight: 0,
+			modules: lit ? [ localLightsCoreModule ] : [],
 			attributes: { aPos: 'vec4f', aCol: 'vec4f', aExt: 'vec4f' },
 			varyings: { vCol: 'vec4f', vCorner: 'vec3f' },
 			vertex: /* wgsl */`
@@ -59,7 +61,18 @@ class Batch {
 	if ( k.z < 0.5 ) { a = pow( sat( 1.0 - length( k.xy ) * 2.0 ), 1.6 ); }
 	else if ( k.z > 1.5 ) { a = sat( 1.0 - abs( k.y ) * 2.0 ) * sat( 1.0 - abs( k.x ) * 2.0 ); }
 	s.albedo = vec3f( 0.0 );
-	s.emissive = in.vs.vCol.rgb;
+${ lit ? /* wgsl */`
+	// smoke, spray and confetti are lit: the sun wrapped round a puff (a sphere normal from the
+	// corner), the sky, and the engines' and lamps' glow
+	let right = normalize( frame.invView[ 0 ].xyz );
+	let up = normalize( frame.invView[ 1 ].xyz );
+	let toCam = normalize( frame.cameraPos - in.P );
+	let c2 = k.xy * 2.0;
+	let n = normalize( right * c2.x + up * c2.y + toCam * sqrt( max( 1.0 - dot( c2, c2 ), 0.05 ) ) );
+	let wrap = 0.35 + 0.65 * max( dot( n, frame.sunDir ), 0.0 );
+	let E = frame.sunColor * wrap * INV_PI + frame.skyIrradiance * 1.1 + localLightsIrradiance( in.P, n ) * INV_PI;
+	s.emissive = in.vs.vCol.rgb * E;` : /* wgsl */`
+	s.emissive = in.vs.vCol.rgb;` }
 	s.alpha = in.vs.vCol.a * a;
 `,
 		} );
@@ -79,7 +92,7 @@ export class Particles {
 	constructor( scene ) {
 
 		this.glow = new Batch( scene, 'particles-glow', 'additive' );
-		this.soft = new Batch( scene, 'particles-soft', 'normal' );
+		this.soft = new Batch( scene, 'particles-soft', 'normal', true );
 		this.time = 0;
 
 	}

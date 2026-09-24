@@ -170,6 +170,16 @@ export const UPGRADES = {
 				{ name: 'Whipple Shield', cost: 90000, hull: 7 },
 			],
 		},
+		{
+			id: 'afterburner', name: 'Afterburner', icon: 'flame',
+			blurb: 'Press SHIFT for a blast of extra thrust that burns no propellant.',
+			levels: [
+				{ name: 'None', cost: 0, charges: 0 },
+				{ name: 'Single Shot', cost: 14000, charges: 1 },
+				{ name: 'Double Tap', cost: 45000, charges: 2 },
+				{ name: 'Triple Threat', cost: 120000, charges: 3 },
+			],
+		},
 		...shared( [ 8000, 26000, 70000, 30000, 110000 ] ),
 	],
 
@@ -439,6 +449,7 @@ export function computeStats( levels, vehicle ) {
 			drag: 0.00012 * L( 'nose' ).drag,
 			steer: L( 'fins' ).steer,
 			hull: L( 'hull' ).hull,
+			afterburners: L( 'afterburner' ).charges,
 		};
 
 	}

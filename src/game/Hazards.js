@@ -1,9 +1,12 @@
 import { Group } from '../engine/scene/Group.js';
 import { CylinderGeometry } from '../engine/geometry/index.js';
+import { Mesh } from '../engine/scene/Mesh.js';
+import { Material } from '../engine/render/Material.js';
 import { ToyBuilder } from '../world/Toy.js';
 import { islandHeight } from '../world/Island.js';
 import { windAt } from './Physics.js';
 import { zoneAt } from './Zones.js';
+import { MathUtils } from '../engine/math/index.js';
 import { models, mats, mesh } from './Models.js';
 
 // Everything in the air (or the void) besides the player: hazards and pickups, spawned ahead of the
@@ -60,7 +63,7 @@ const TYPES = {
 // energy colours by hazard (and zone)
 const ENERGY = { plasmoid: [ 1, 0.5, 0.12 ], plasmoidBlue: [ 0.4, 0.6, 1 ], plasmoidPink: [ 1, 0.35, 0.8 ], beam: [ 0.55, 0.75, 1 ], protostar: [ 1, 0.75, 0.9 ], jet: [ 0.6, 0.8, 1 ], hvstar: [ 1, 0.9, 0.7 ], cstring: [ 0.7, 0.4, 1 ], jetburst: [ 0.55, 0.6, 1 ] };
 
-function pickType( h, zoneId, night, rnd ) {
+function pickType( h, zoneId, night, rnd, bias = null ) {
 
 	let total = 0;
 	const opts = [];
@@ -80,6 +83,7 @@ function pickType( h, zoneId, night, rnd ) {
 
 		}
 
+		if ( w > 0 && bias && bias[ k ] ) w *= bias[ k ];
 		if ( w > 0 ) {
 
 			opts.push( [ k, w ] );
@@ -135,6 +139,22 @@ export class Hazards {
 
 		}
 
+		// thermals: columns of rising warm air the balloon can ride (a shimmer of rising streaks)
+		this.thermals = [];
+		this.thermalGeo = new CylinderGeometry( 1, 1, 1, 24, 1, true ).translate( 0, 0.5, 0 );
+		this.thermalMat = new Material( {
+			name: 'thermal', lit: false, transparent: true, depthWrite: false, blending: 'additive', side: 'double',
+			varyings: { vTh: 'vec2f' }, vertex: 'o.vTh = vec2f( atan2( v.position.z, v.position.x ), v.position.y );',
+			surface: /* wgsl */`
+	let f = 1.0 - abs( dot( in.N, in.V ) );
+	let a = in.vs.vTh.x; let y = in.vs.vTh.y;
+	let streak = pow( 0.5 + 0.5 * sin( a * 9.0 + sin( y * 7.0 + frame.time * 0.7 ) * 1.5 ), 6.0 ) * ( 0.5 + 0.5 * sin( y * 22.0 - frame.time * 5.0 + a * 3.0 ) );
+	let ends = smoothstep( 0.0, 0.15, y ) * smoothstep( 1.0, 0.75, y );
+	s.albedo = vec3f( 0.0 );
+	s.emissive = ( frame.sunColor * 0.012 + frame.skyIrradiance * 0.25 ) * vec3f( 1.0, 0.95, 0.85 ) * ( 0.25 + streak * 1.6 ) * f * ends;
+	s.alpha = 0.3 * ends;
+`,
+		} );
 		this.reset();
 
 	}
@@ -153,6 +173,9 @@ export class Hazards {
 		this.nextOrbY = startY + 400;
 		this.nextSpecialY = startY + 300;
 		this.nextRingY = startY + 160;
+		this.nextThermalY = startY + 70;
+		for ( const t of this.thermals || [] ) this.group.remove( t.mesh );
+		this.thermals = [];
 		this.issDone = false;
 
 	}
@@ -177,9 +200,10 @@ export class Hazards {
 
 			const y = this.nextHazardY;
 			const h = realAt( y );
-			const type = pickType( h, zoneAt( h ).id, ctx.night, this.rnd );
+			const ev = ctx.event || {};
+			const type = pickType( h, zoneAt( h ).id, ctx.night, this.rnd, ev.hazardBias );
 			if ( type ) this._spawnHazard( type, y, player, view, ctx );
-			this.nextHazardY += this._spacing( h, ctx );
+			this.nextHazardY += this._spacing( h, ctx ) / ( ( ctx.event && ctx.event.hazardRate ) || 1 );
 
 		}
 
@@ -187,7 +211,7 @@ export class Hazards {
 		while ( this.nextCoinY < ahead && guard ++ < 8 ) {
 
 			this._spawnCoins( this.nextCoinY, player, view, zoneAt( realAt( this.nextCoinY ) ), ctx );
-			this.nextCoinY += ctx.local ? 40 + this.rnd() * 30 : 34 + this.nextCoinY * 0.035 + this.rnd() * 30;
+			this.nextCoinY += ( ctx.local ? 40 + this.rnd() * 30 : 34 + this.nextCoinY * 0.035 + this.rnd() * 30 ) / ( ( ctx.event && ctx.event.coinRate ) || 1 );
 
 		}
 
@@ -204,7 +228,7 @@ export class Hazards {
 
 			const z = zoneAt( realAt( this.nextStarY ) );
 			this._spawnPickup( 'star', this.nextStarY, player, view, z.coin * 25, ctx );
-			this.nextStarY += ctx.local ? 900 + this.rnd() * 700 : 1400 + this.nextStarY * 0.4 + this.rnd() * 900;
+			this.nextStarY += ( ctx.local ? 900 + this.rnd() * 700 : 1400 + this.nextStarY * 0.4 + this.rnd() * 900 ) / ( ( ctx.event && ctx.event.starRate ) || 1 );
 
 		}
 
@@ -213,7 +237,33 @@ export class Hazards {
 
 			const kinds = [ 'shieldOrb', 'magnetOrb', 'boostOrb' ];
 			this._spawnPickup( kinds[ ( this.rnd() * 3 ) | 0 ], this.nextOrbY, player, view, 0, ctx );
-			this.nextOrbY += ctx.local ? 520 + this.rnd() * 500 : 600 + this.nextOrbY * 0.3 + this.rnd() * 600;
+			this.nextOrbY += ( ctx.local ? 520 + this.rnd() * 500 : 600 + this.nextOrbY * 0.3 + this.rnd() * 600 ) / ( ( ctx.event && ctx.event.orbRate ) || 1 );
+
+		}
+
+		// thermals for the balloon, low down
+		if ( ctx.vehicle === 'balloon' ) {
+
+			guard = 0;
+			while ( this.nextThermalY < ahead && guard ++ < 2 ) {
+
+				if ( realAt( this.nextThermalY ) < 4200 ) {
+
+					const r = 9 + this.rnd() * 7, hgt = 160 + this.rnd() * 160;
+					const x = this._placeX( player, view, this.nextThermalY, 0.7, ctx );
+					const m = new Mesh( this.thermalGeo, this.thermalMat );
+					m.scale.set( r, hgt, r );
+					m.position.set( x, this.nextThermalY, - 1 );
+					m.layers.set( 2 );
+					m.castShadow = false;
+					this.group.add( m );
+					this.thermals.push( { x, y: this.nextThermalY, r, h: hgt, mesh: m, strength: 0.8 + this.rnd() * 0.6 } );
+
+				}
+
+				this.nextThermalY += 260 + this.rnd() * 260;
+
+			}
 
 		}
 
@@ -223,7 +273,7 @@ export class Hazards {
 
 			const h = realAt( this.nextRingY );
 			if ( h > 60 ) this._spawnRingChain( this.nextRingY, player, view, zoneAt( h ), ctx.local ? 1 : 0.35 );
-			this.nextRingY += ctx.local ? 280 + this.rnd() * 240 : 220 + this.nextRingY * 0.12 + this.rnd() * 200;
+			this.nextRingY += ( ctx.local ? 280 + this.rnd() * 240 : 220 + this.nextRingY * 0.12 + this.rnd() * 200 ) / ( ( ctx.event && ctx.event.ringRate ) || 1 );
 
 		}
 
@@ -237,7 +287,7 @@ export class Hazards {
 				const roll = this.rnd();
 				const kind = z.space ? ( roll < 0.45 ? 'crystal' : roll < 0.75 ? 'probe' : 'astronaut' ) : roll < 0.6 ? 'astronaut' : 'crystal';
 				this._spawnPickup( kind, this.nextSpecialY, player, view, z.coin * ( kind === 'crystal' ? 12 : 40 ), ctx );
-				this.nextSpecialY += 700 + this.rnd() * 900;
+				this.nextSpecialY += ( 700 + this.rnd() * 900 ) / ( ( ctx.event && ctx.event.specialRate ) || 1 );
 
 			}
 
@@ -1105,7 +1155,31 @@ export class Hazards {
 
 		}
 
+		// thermals drift with the wind and are left behind
+		const keepT = [];
+		for ( const t of this.thermals ) {
+
+			if ( t.y + t.h < keepBelow ) this.group.remove( t.mesh );
+			else keepT.push( t );
+
+		}
+
+		this.thermals = keepT;
 		this._sweep();
+
+	}
+
+	// the lift of the thermal the player is in (0: none)
+	thermalAt( x, y ) {
+
+		for ( const t of this.thermals ) {
+
+			const dx = Math.abs( x - t.x );
+			if ( dx < t.r * 1.3 && y > t.y && y < t.y + t.h ) return t.strength * ( 1 - MathUtils.clamp( ( dx - t.r * 0.6 ) / ( t.r * 0.7 ), 0, 1 ) ) * Math.min( 1, ( y - t.y ) / 20, ( t.y + t.h - y ) / 30 );
+
+		}
+
+		return 0;
 
 	}
 
@@ -1144,7 +1218,13 @@ export class Hazards {
 		}
 
 		for ( const p of this.pickups ) p.y -= dy;
-		this.nextHazardY -= dy; this.nextCoinY -= dy; this.nextFuelY -= dy; this.nextStarY -= dy; this.nextOrbY -= dy; this.nextSpecialY -= dy; this.nextRingY -= dy;
+		this.nextHazardY -= dy; this.nextCoinY -= dy; this.nextFuelY -= dy; this.nextStarY -= dy; this.nextOrbY -= dy; this.nextSpecialY -= dy; this.nextRingY -= dy; this.nextThermalY -= dy;
+		for ( const t of this.thermals ) {
+
+			t.y -= dy;
+			t.mesh.position.y = t.y;
+
+		}
 
 	}
 

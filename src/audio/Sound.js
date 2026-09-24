@@ -322,6 +322,12 @@ export class Sound {
 			case 'click':
 				this._tone( { type: 'triangle', f0: 1200, dur: 0.04, gain: 0.08 } );
 				break;
+			case 'firework':
+				// a thud, then crackling glitter
+				this._tone( { f0: 120, f1: 45, dur: 0.35, gain: 0.35 } );
+				this._noise( { dur: 0.5, gain: 0.45, f0: 3000, f1: 300 } );
+				for ( let i = 0; i < 6; i ++ ) this._noise( { dur: 0.06, gain: 0.12, type: 'highpass', f0: 5000, f1: 8000, delay: 0.25 + i * 0.07 + Math.random() * 0.05 } );
+				break;
 			case 'jump':
 				// a rising warp whine and a thump
 				this._tone( { type: 'sawtooth', f0: 80, f1: 1600, dur: 1.1, gain: 0.14, attack: 0.05 } );

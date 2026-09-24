@@ -53,6 +53,8 @@ export const ACHIEVEMENTS = [
 	stat( 'probe_1', 'Voyager', 'Recover a lost probe', 'probes', 1, 50000 ),
 	stat( 'crystal_10', 'Shiny', 'Collect 10 space crystals', 'crystals', 10, 80000 ),
 	stat( 'bags_20', 'Ballast Master', 'Drop 20 sandbags', 'bags', 20, 800 ),
+	stat( 'bullseye', 'Bullseye', 'Land the balloon right on the pad', 'bullseyes', 1, 1500 ),
+	{ id: 'afterburner', name: 'Punch It', desc: 'Fire three afterburners in one rocket run', reward: 25000, test: ( s, r ) => !! r && ( r.afterburns || 0 ) >= 3 },
 	{ id: 'untouchable', name: 'Untouchable', desc: 'Climb past 1 km without a scratch', reward: 800, test: ( s, r ) => !! r && r.hits === 0 && r.maxH >= 1000 },
 	{ id: 'untouchable_space', name: 'Flawless Flight', desc: 'Reach Mars without taking a hit', reward: 150000, test: ( s, r ) => !! r && r.hits === 0 && r.zones.includes( 'mars' ) },
 	{ id: 'night_owl', name: 'Night Owl', desc: 'Fly a run at night', reward: 500, test: ( s ) => ( s.stats.nightRuns || 0 ) >= 1 },

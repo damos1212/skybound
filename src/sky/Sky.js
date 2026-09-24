@@ -80,6 +80,8 @@ export class Sky {
 			webOffset: [ 'vec3f', new Vector3() ],
 			// 0..1: hyperjump warp tunnel
 			tunnel: [ 'f32', 0 ],
+			// 0..1: the high wispy cirrus deck (Earth skies)
+			cirrus: [ 'f32', 1 ],
 			// aurora curtains (0..1): night skies and the edge of space
 			aurora: [ 'f32', 0 ],
 			bodyCount: [ 'u32', 0 ],
@@ -106,6 +108,7 @@ export class Sky {
 		this.planetTime = U.planetTime;
 		this.aurora = U.aurora;
 		this.sunTint = U.sunTint;
+		this.cirrus = U.cirrus;
 		this._module = null;
 		this._background = null;
 
@@ -440,6 +443,31 @@ fn skyTunnel( dir: vec3f ) -> vec3f {
 	let col = mix( vec3f( 0.35, 0.55, 1.0 ), vec3f( 1.0, 0.9, 1.0 ), h );
 	let glow = exp( -a * 3.5 ) * 1.5 + exp( -pow( ( a - 1.3 ) / 0.45, 2.0 ) ) * 0.12;
 	return ( col * streak * across * 2.5 + vec3f( 0.6, 0.5, 1.0 ) * glow ) * k;
+}
+
+// cirrus: thin wisps combed out along the wind on a deck at 9 km, lit from behind by the sun (they
+// glow around it, and turn pink at sunset); vec4( in-scattered light, transmittance )
+fn skyCirrus( dir: vec3f ) -> vec4f {
+	let k = skyParams.cirrus;
+	let camH = frame.cameraPos.y - frame.seaLevel;
+	let dy = 9000.0 - camH;
+	if ( k <= 0.0 || dir.y <= 0.02 || dy <= 0.0 ) { return vec4f( 0.0, 0.0, 0.0, 1.0 ); }
+	let t = dy / dir.y;
+	let p = vec2f( frame.cameraPos.x + frame.originX, frame.cameraPos.z ) + dir.xz * t + frame.windDir * frame.time * 18.0;
+	let w = frame.windDir;
+	let along = dot( p, w ) * 0.00009;
+	let across = dot( p, vec2f( -w.y, w.x ) ) * 0.00055;
+	let big = skyFbm( vec3f( along * 0.35, across * 0.35, 3.0 ), 3 );
+	let n = skyFbm( vec3f( along, across, 7.0 ) + vec3f( big * 1.5, 0.0, 0.0 ), 5 );
+	let hook = skyVnoise( vec3f( along * 6.0, across * 1.5, 1.0 ) );
+	let wisp = smoothstep( 0.5, 0.78, n ) * smoothstep( 0.35, 0.65, big ) * ( 0.6 + hook * 0.6 );
+	let fade = exp( - t / 70000.0 ) * smoothstep( 0.02, 0.12, dir.y ) * smoothstep( 0.0, 1500.0, dy );
+	let a = sat( wisp * fade * 0.55 * k );
+	let L = atmosphereParams.sunDir;
+	let mu = dot( dir, L );
+	let phase = 0.25 + 3.0 * pow( sat( mu * 0.5 + 0.5 ), 10.0 );
+	let col = frame.sunColor * phase * 0.09 + frame.skyIrradiance * 0.9;
+	return vec4f( col * a, 1.0 - a );
 }
 
 fn skyMoon( dir: vec3f ) -> vec3f {
@@ -943,6 +971,10 @@ fn skyBackground( dir: vec3f, starK: f32 ) -> vec3f {
 	}
 	if ( skyParams.spaceMix > 0.5 ) { L += skyDeepField( dir ) + skyWeb( dir ) + skyCMB( dir ); }
 	L += skyAurora( dir ) * atm;
+	if ( atm > 0.0 ) {
+		let ci = skyCirrus( dir );
+		L = L * ci.a + ci.rgb;
+	}
 	return L;
 }
 
