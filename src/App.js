@@ -72,10 +72,17 @@ export class App {
 
 	async init( onProgress = () => {} ) {
 
+		// let the loader paint between steps (a timer too: a background tab gets no animation frames,
+		// and loading should carry on there)
 		const progress = async ( p, text ) => {
 
 			onProgress( p, text );
-			await new Promise( ( r ) => requestAnimationFrame( () => setTimeout( r, 0 ) ) );
+			await new Promise( ( r ) => {
+
+				setTimeout( r, 50 );
+				requestAnimationFrame( () => setTimeout( r, 0 ) );
+
+			} );
 
 		};
 
