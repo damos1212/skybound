@@ -4,10 +4,21 @@
 
 import { altitudePay, formatAltitude } from './Zones.js';
 
+// per vehicle: the smallest reach / no-hit targets, how far past the best a reach mission asks, the
+// smallest reward
+const V = {
+	balloon: { reach: 150, nohit: 100, k: 1.25, pay: 60 },
+	rocket: { reach: 30000, nohit: 20000, k: 1.25, pay: 3000 },
+	starship: { reach: 1e9, nohit: 1e8, k: 4, pay: 60000 },
+	warpship: { reach: 5e16, nohit: 3e16, k: 3, pay: 5e6 },
+	ark: { reach: 3e21, nohit: 2e21, k: 3, pay: 3e8 },
+};
+const SHIP = [ 'starship', 'warpship', 'ark' ];
+
 const TEMPLATES = [
 	{ type: 'reach', weight: 3, make: ( ctx ) => {
 
-		const t = niceNumber( Math.max( ctx.v === 'starship' ? 1e9 : ctx.v === 'rocket' ? 30000 : 150, ctx.best * ( ctx.v === 'starship' ? 4 : 1.25 ) ) );
+		const t = niceNumber( Math.max( V[ ctx.v ].reach, ctx.best * V[ ctx.v ].k ) );
 		return { target: t, text: `Reach ${ formatAltitude( t ) } in one run`, k: 1.2 };
 
 	} },
@@ -19,7 +30,7 @@ const TEMPLATES = [
 	} },
 	{ type: 'nohit', weight: 2, make: ( ctx ) => {
 
-		const t = niceNumber( Math.max( ctx.v === 'starship' ? 1e8 : ctx.v === 'rocket' ? 20000 : 100, ctx.best * 0.6 ) );
+		const t = niceNumber( Math.max( V[ ctx.v ].nohit, ctx.best * 0.6 ) );
 		return { target: t, text: `Reach ${ formatAltitude( t ) } without a scratch`, k: 1.1 };
 
 	} },
@@ -41,6 +52,19 @@ const TEMPLATES = [
 	{ type: 'land', weight: 1, vehicles: [ 'balloon' ], make: () => ( { target: 1, text: 'Land on the island, not in the sea', k: 0.7 } ) },
 	{ type: 'night', weight: 1, make: () => ( { target: 1, text: 'Fly a run at night', k: 0.6 } ) },
 	{ type: 'rescue', weight: 2, vehicles: [ 'rocket', 'starship' ], make: () => ( { target: 1, text: 'Rescue a stranded astronaut', k: 1 } ) },
+	{ type: 'rings', weight: 3, vehicles: SHIP, make: ( ctx ) => {
+
+		const n = [ 6, 10, 15, 20, 26 ][ Math.min( 4, ctx.tier ) ];
+		return { target: n, text: `Fly through ${ n } warp rings in one run`, k: 0.9 };
+
+	} },
+	{ type: 'chains', weight: 2, vehicles: SHIP, make: ( ctx ) => {
+
+		const n = Math.min( 4, 1 + Math.floor( ctx.tier / 2 ) );
+		return { target: n, text: n > 1 ? `Complete ${ n } ring chains in one run` : 'Complete a whole ring chain', k: 1 };
+
+	} },
+	{ type: 'jumps', weight: 2, vehicles: [ 'warpship', 'ark' ], need: ( ctx ) => ctx.jumps >= 2, make: ( ctx ) => ( { target: ctx.jumps, text: `Hyperjump ${ ctx.jumps } times in one run`, k: 0.7 } ) },
 	{ type: 'shieldblock', weight: 1, need: ( ctx ) => ctx.shield > 0, make: () => ( { target: 1, text: 'Let your bubble absorb a hit', k: 0.5 } ) },
 ];
 
@@ -54,7 +78,7 @@ function niceNumber( x ) {
 
 function payOf( ctx ) {
 
-	return Math.max( ctx.v === 'starship' ? 60000 : ctx.v === 'rocket' ? 3000 : 60, altitudePay( Math.max( ctx.best, 100 ) ) );
+	return Math.max( V[ ctx.v ].pay, altitudePay( Math.max( ctx.best, 100 ) ) );
 
 }
 
@@ -107,6 +131,9 @@ export function missionProgress( m, run ) {
 		case 'night': return run.timeOfDay === 'night' ? 1 : 0;
 		case 'rescue': return run.astronauts;
 		case 'shieldblock': return run.blocked;
+		case 'rings': return run.rings || 0;
+		case 'chains': return run.chains || 0;
+		case 'jumps': return run.jumps || 0;
 
 	}
 

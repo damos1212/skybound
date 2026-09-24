@@ -53,6 +53,8 @@ export class App {
 		this.space = null;
 		this.worldVisible = true;
 		this.cloudsEnabled = true;
+		// a white flash (hyperjumps, the black hole, the Edge), decays by itself
+		this.flash = 0;
 
 	}
 
@@ -202,9 +204,10 @@ export class App {
 		const sp = this.space;
 		if ( sp ) {
 
-			// outside the atmosphere: white sunlight, falling off with the distance to the Sun
+			// outside the atmosphere: the key star's light, falling off with the distance to it
 			const k = SUN_ILLUMINANCE * sp.flux;
-			G.sunColor.value.setRGB( k, k * 0.98, k * 0.95 );
+			const tn = sp.sunTint || [ 1, 1, 1 ];
+			G.sunColor.value.setRGB( k * tn[ 0 ], k * 0.98 * tn[ 1 ], k * 0.95 * tn[ 2 ] );
 			const earthShine = sp.earthShine || 0;
 			G.skyIrradiance.value.setRGB( 0.004 + earthShine * 0.05, 0.005 + earthShine * 0.07, 0.008 + earthShine * 0.12 );
 			G.horizonColor.value.setRGB( 0.01, 0.012, 0.02 );
@@ -237,15 +240,38 @@ export class App {
 		U.spaceMix.value = this.space ? this.space.spaceMix : 0;
 		U.planetTime.value += dt;
 		U.aurora.value = this.space ? 0 : Math.max( G.night.value * 0.8, MathUtils.smoothstep( alt, 45000, 90000 ) * ( 1 - MathUtils.smoothstep( alt, 400000, 900000 ) ) * 0.6 );
-		if ( this.space ) {
+		const sp = this.space;
+		if ( sp ) {
 
-			this.sky.setBodies( this.space.bodies );
-			U.nebula.value.set( ...( this.space.nebula || [ 0.5, 0.2, 0.7, 0 ] ) );
+			this.sky.setBodies( sp.bodies );
+			U.nebula.value.set( ...( sp.nebula || [ 0.5, 0.2, 0.7, 0 ] ) );
+			U.sunTint.value.set( ...( sp.sunTint || [ 1, 1, 1 ] ) );
+			U.sunDiskIntensity.value = sp.sunDisk ?? 1;
+			U.starField.value = sp.starField ?? 1;
+			U.deepField.value = sp.deepField || 0;
+			U.web.value = sp.web || 0;
+			U.cmb.value = sp.cmb || 0;
+			U.tunnel.value = sp.tunnel || 0;
+			if ( sp.webOffset ) U.webOffset.value.set( ...sp.webOffset );
+			if ( sp.frame ) {
+
+				U.frameX.value.set( ...sp.frame.ex );
+				U.frameY.value.set( ...sp.frame.ey );
+				U.frameZ.value.set( ...sp.frame.ez );
+
+			}
 
 		} else {
 
 			U.bodyCount.value = 0;
 			U.nebula.value.w = 0;
+			U.sunTint.value.set( 1, 1, 1 );
+			U.sunDiskIntensity.value = 1;
+			U.starField.value = 1;
+			U.deepField.value = 0;
+			U.web.value = 0;
+			U.cmb.value = 0;
+			U.tunnel.value = 0;
 
 		}
 
@@ -297,7 +323,8 @@ export class App {
 
 		this.particles.update( dt, cam );
 
-		G.exposure.value = this.settings.exposure;
+		this.flash = Math.max( 0, this.flash - dt * 1.6 );
+		G.exposure.value = this.settings.exposure * ( 1 + this.flash * this.flash * 6 );
 		this.post.params.fogDensity.value = this.space ? 0 : 0.000045;
 		// space: the eye adapts further (the Sun up close, the dark between the planets)
 		this.post.autoExposure.min.value = this.space ? 0.05 : 0.35;

@@ -1,5 +1,5 @@
 import { Vector3 } from '../engine/math/index.js';
-import { UPGRADES, VEHICLES, VEHICLE_BY_ID } from '../game/Upgrades.js';
+import { UPGRADES, VEHICLES, VEHICLE_BY_ID, isShip } from '../game/Upgrades.js';
 import { ZONES, zoneAt, formatAltitude, formatSpeed, formatMoney } from '../game/Zones.js';
 import { ACHIEVEMENTS } from '../game/Achievements.js';
 import { TIMES_OF_DAY } from '../App.js';
@@ -30,10 +30,15 @@ const ICONS = {
 	infinity: '<path d="M20 22c-6 0-10 4-10 10s4 10 10 10c10 0 14-20 24-20 6 0 10 4 10 10s-4 10-10 10c-10 0-14-20-24-20z" fill="none" stroke="#ff7ad9" stroke-width="6"/>',
 	balloonV: '<path d="M32 4c-13 0-21 10-21 21 0 10 8 17 14 23h14c6-6 14-13 14-23 0-11-8-21-21-21z" fill="#ff5a36"/><path d="M32 4c-5 0-9 10-9 21 0 10 3 17 5 23h8c2-6 5-13 5-23 0-11-4-21-9-21z" fill="#fff4dc"/><rect x="26" y="52" width="12" height="9" rx="2" fill="#a87650"/>',
 	rocketV: '<path d="M32 3c8 8 11 18 11 30v14H21V33c0-12 3-22 11-30z" fill="#f4efe6"/><circle cx="32" cy="24" r="5" fill="#7fc7ff"/><path d="M21 38l-9 12h9zM43 38l9 12h-9z" fill="#e2463a"/><path d="M24 47h16l-3 12h-10z" fill="#ff7a1f"/>',
+	core: '<circle cx="32" cy="32" r="22" fill="none" stroke="#7fe3ff" stroke-width="6"/><circle cx="32" cy="32" r="11" fill="#b070ff"/><circle cx="32" cy="32" r="5" fill="#fff"/>',
+	jump: '<path d="M10 44l18-24 6 10 20-18-10 30-8-10z" fill="#7fe3ff"/><path d="M8 52h48" stroke="#b070ff" stroke-width="4" stroke-linecap="round"/>',
+	ring: '<ellipse cx="32" cy="32" rx="24" ry="14" fill="none" stroke="#5fd0ff" stroke-width="6"/><ellipse cx="32" cy="32" rx="24" ry="14" fill="none" stroke="#fff" stroke-width="2"/>',
+	warpV: '<ellipse cx="32" cy="30" rx="24" ry="7" fill="none" stroke="#7fe3ff" stroke-width="4"/><path d="M32 3c5 6 7 14 7 24v24H25V27c0-10 2-18 7-24z" fill="#f4efe6"/><rect x="8" y="30" width="6" height="22" rx="3" fill="#2f6fde"/><rect x="50" y="30" width="6" height="22" rx="3" fill="#2f6fde"/><path d="M26 50h12l-2 10h-8z" fill="#b070ff"/>',
+	arkV: '<ellipse cx="32" cy="28" rx="26" ry="8" fill="none" stroke="#f4efe6" stroke-width="5"/><path d="M32 2l7 12v30H25V14z" fill="#2f6fde"/><circle cx="32" cy="52" r="8" fill="#111"/><ellipse cx="32" cy="52" rx="13" ry="4" fill="none" stroke="#ff9a3c" stroke-width="3"/>',
 	shipV: '<path d="M32 4c7 6 10 16 10 28v16H22V32c0-12 3-22 10-28z" fill="#f4efe6"/><path d="M22 34L6 48l16 2zM42 34l16 14-16 2z" fill="#2f6fde"/><circle cx="32" cy="22" r="4.5" fill="#7fe3ff"/><path d="M25 50h14l-2 10H27z" fill="#7fe3ff"/>',
 };
 
-const VEHICLE_ICON = { balloon: 'balloonV', rocket: 'rocketV', starship: 'shipV' };
+const VEHICLE_ICON = { balloon: 'balloonV', rocket: 'rocketV', starship: 'shipV', warpship: 'warpV', ark: 'arkV' };
 
 const REASONS = {
 	splash: [ 'Splashdown!', 'Back in the sea. The gulls are laughing.' ],
@@ -43,7 +48,8 @@ const REASONS = {
 	apogee: [ 'Apogee!', 'The top of the arc. Gravity takes it from here.' ],
 	destroyed: [ 'Kaboom!', 'That did not buff out.' ],
 	drift: [ 'Adrift', 'Tanks dry. The stars wheel slowly by.' ],
-	victory: [ 'Event Horizon!', 'You flew a hot-air balloon\'s grandchild to the centre of the galaxy.' ],
+	horizon: [ 'Event Horizon!', 'The Warpship slingshots around Sagittarius A*. It will take an Ark to go further.' ],
+	victory: [ 'BEYOND THE EDGE!', 'You flew a hot-air balloon\'s great-great-grandchild out of the observable universe.' ],
 };
 
 function el( tag, cls, html ) {
@@ -67,7 +73,9 @@ const _p = new Vector3();
 const METER = {
 	balloon: { from: 0, to: 30000, zones: [ 'shore', 'low', 'clouds', 'high', 'strato' ] },
 	rocket: { from: 0, to: 2500000, zones: [ 'low', 'clouds', 'high', 'strato', 'meso', 'leo', 'meo' ] },
-	starship: { from: 4e5, to: 2.6e20, zones: [ 'leo', 'moon', 'mars', 'sun', 'jupiter', 'saturn', 'neptune', 'kuiper', 'interstellar', 'blackhole' ] },
+	starship: { from: 4e5, to: 2e17, zones: [ 'leo', 'moon', 'mars', 'sun', 'jupiter', 'saturn', 'neptune', 'kuiper', 'interstellar', 'alphacen', 'trappist' ] },
+	warpship: { from: 1e13, to: 2.6e20, zones: [ 'interstellar', 'alphacen', 'trappist', 'betelgeuse', 'orion', 'crab', 'blackhole' ] },
+	ark: { from: 2.4e20, to: 4.5e26, zones: [ 'halo', 'omegacen', 'lmc', 'andromeda', 'virgo', 'laniakea', 'quasar', 'elgordo', 'edge' ] },
 };
 
 export class UI {
@@ -101,7 +109,7 @@ export class UI {
 		h.innerHTML = `
 			<div class="brand">
 				<div class="logo">SKYBOUND</div>
-				<div class="tagline">From the beach to the black hole.</div>
+				<div class="tagline">From the beach to the edge of the universe.</div>
 			</div>
 			<div class="topbar">
 				<div class="pill cash"><span class="k">Cash</span><span class="v" data-bind="cash"></span></div>
@@ -178,6 +186,7 @@ export class UI {
 				<div class="gauge heat" data-bind="heatRow"><span class="gicon" data-bind="heatIcon">${ icon( 'flame', 22 ) }</span><div class="bar"><div class="fill" data-bind="heat"></div></div></div>
 				<div class="hull" data-bind="hull"></div>
 				<div class="bags" data-bind="bags"></div>
+				<div class="jumps" data-bind="jumps"></div>
 				<div class="buffs" data-bind="buffs"></div>
 			</div>
 			<div class="run-cash"><span data-bind="runcash">$0</span></div>
@@ -194,7 +203,7 @@ export class UI {
 		click( hud.querySelector( '[data-act=abort]' ), () => {
 
 			g.setPaused( false );
-			g.endRun( g.vehicle === 'starship' ? 'drift' : g.vehicle === 'rocket' ? 'apogee' : 'fuel' );
+			g.endRun( isShip( g.vehicle ) ? 'drift' : g.vehicle === 'rocket' ? 'apogee' : 'fuel' );
 
 		} );
 		hud.querySelector( '[data-act=bag]' ).addEventListener( 'touchstart', ( e ) => {
@@ -457,7 +466,7 @@ export class UI {
 		let html = '';
 		if ( v === 'balloon' ) html = `<span><b>${ ( st.lift / 9.81 ).toFixed( 2 ) }g</b> lift</span><span><b>${ st.fuel }s</b> fuel</span><span><b>${ st.hull }</b> hull</span><span><b>${ st.fan }</b> steer</span>`;
 		else if ( v === 'rocket' ) html = `<span><b>${ ( st.thrust / 9.81 ).toFixed( 1 ) }g</b> thrust</span><span><b>${ st.fuel }s</b> burn</span><span><b>${ st.boosters }</b> boosters</span><span><b>${ st.hull }</b> hull</span>`;
-		else html = `<span><b>×${ Math.exp( st.boost ).toFixed( 2 ) }</b>/s speed</span><span><b>${ st.fuel }s</b> burn</span><span><b>${ st.hull }</b> hull</span><span><b>${ Math.round( ( 1 - st.heat ) * 100 ) }%</b> heat shield</span>`;
+		else html = `<span><b>×${ Math.exp( st.boost ).toFixed( 2 ) }</b>/s speed</span><span><b>${ st.fuel }s</b> burn</span><span><b>${ st.hull }</b> hull</span><span><b>${ Math.round( ( 1 - st.heat ) * 100 ) }%</b> ${ v === 'starship' ? 'heat shield' : 'screening' }</span>${ st.jumps ? `<span><b>${ st.jumps }</b> hyperjump${ st.jumps > 1 ? 's' : '' }</span>` : '' }`;
 		this.statRow.innerHTML = html;
 
 	}
@@ -487,6 +496,9 @@ export class UI {
 				[ 'Best (balloon)', g.save.bestBy.balloon ? formatAltitude( g.save.bestBy.balloon ) : '—' ],
 				[ 'Best (rocket)', g.save.bestBy.rocket ? formatAltitude( g.save.bestBy.rocket ) : '—' ],
 				[ 'Best (Starship)', g.save.bestBy.starship ? formatAltitude( g.save.bestBy.starship ) : '—' ],
+				[ 'Best (Warpship)', g.save.bestBy.warpship ? formatAltitude( g.save.bestBy.warpship ) : '—' ],
+				[ 'Best (Infinity Ark)', g.save.bestBy.ark ? formatAltitude( g.save.bestBy.ark ) : '—' ],
+				[ 'Warp rings', S.rings || 0 ], [ 'Hyperjumps', S.jumps || 0 ],
 				[ 'Top speed', formatSpeed( S.maxSpeed || 0 ) ], [ 'Coins collected', ( S.coins || 0 ).toLocaleString( 'en-US' ) ],
 				[ 'Total earned', formatMoney( S.earned || 0 ) ], [ 'Zones discovered', `${ g.save.zones.length } / ${ ZONES.length }` ],
 				[ 'Splashdowns', S.splashes ], [ 'Pops', S.pops ], [ 'Hits blocked', S.blocked ], [ 'Astronauts rescued', S.astronauts ],
@@ -689,7 +701,7 @@ export class UI {
 		c.innerHTML = `
 			<div class="credits-roll">
 				<div class="cr-big">SKYBOUND</div>
-				<p>You went from a patchwork balloon on a wooden pier to the heart of the Milky Way.</p>
+				<p>You went from a patchwork balloon on a wooden pier, past the Moon and the Sun, other stars and nebulae, the heart of the Milky Way, a hundred billion galaxies, and out through the oldest light in the universe.</p>
 				<p>The gulls will never believe it.</p>
 				<h3>Flown by</h3><p>You</p>
 				<h3>Engine</h3><p>A home-grown WebGPU renderer built on Tidewater's engine core</p>
@@ -736,8 +748,8 @@ export class UI {
 			const h = g.realH();
 			this.set( 'alt', formatAltitude( h ) );
 			this.set( 'zone', zoneAt( h ).name );
-			const speed = v === 'starship' && g.mode === 'space' ? s.v : Math.hypot( s.vx, s.vy );
-			const vs = v === 'starship' ? '▲ ' + formatSpeed( speed ) : ( s.vy >= 0 ? '▲ ' : '▼ ' ) + formatSpeed( Math.abs( s.vy ) );
+			const speed = isShip( v ) && g.mode === 'space' ? s.v : Math.hypot( s.vx, s.vy );
+			const vs = isShip( v ) ? '▲ ' + formatSpeed( speed ) : ( s.vy >= 0 ? '▲ ' : '▼ ' ) + formatSpeed( Math.abs( s.vy ) );
 			this.set( 'vs', vs );
 			const warp = g.warp > 1.5 ? `⏩ Coasting ×${ Math.round( g.warp ) }` : '';
 			this.set( 'warp', warp );
@@ -781,13 +793,24 @@ export class UI {
 
 			}
 
-			this.set( 'heatIcon', icon( v === 'rocket' ? 'booster' : v === 'starship' ? 'heatshield' : 'flame', 22 ), true );
+			this.set( 'heatIcon', icon( v === 'rocket' ? 'booster' : isShip( v ) ? 'heatshield' : 'flame', 22 ), true );
+			// hyperjump charges
+			let jumps = '';
+			if ( st.jumps ) {
+
+				for ( let i = 0; i < st.jumps; i ++ ) jumps += `<span class="jc ${ i < ( s.jumps || 0 ) ? 'on' : '' } ${ s.jumpT > 0 && i === ( s.jumps || 0 ) ? 'fire' : '' }"></span>`;
+				jumps += '<kbd>Shift</kbd>';
+
+			}
+
+			this.set( 'jumps', jumps, true );
 			let hull = '';
 			for ( let i = 0; i < st.hull; i ++ ) hull += `<span class="hp ${ i < s.hull ? 'on' : '' }"></span>`;
 			if ( g.shield > 0 ) hull += `<span class="sh">${ '◯'.repeat( g.shield ) }</span>`;
 			this.set( 'hull', hull, true );
 			this.set( 'bags', s.bags > 0 ? `${ icon( 'sandbag', 18 ) }×${ s.bags }` : '', true );
-			const buffs = ( g.buffs.magnet > 0 ? `<span class="buff mag">🧲 ${ Math.ceil( g.buffs.magnet ) }</span>` : '' ) + ( g.buffs.boost > 0 ? '<span class="buff boost">⚡ TURBO</span>' : '' );
+			const chain = g.hazards.pickups.find( ( p ) => p.kind === 'ring' && p.chain && p.chain.got > 0 && p.chain.got < p.chain.n );
+			const buffs = ( g.buffs.magnet > 0 ? `<span class="buff mag">🧲 ${ Math.ceil( g.buffs.magnet ) }</span>` : '' ) + ( g.buffs.boost > 0 ? '<span class="buff boost">⚡ TURBO</span>' : '' ) + ( chain ? `<span class="buff ring">◎ ${ chain.chain.got } / ${ chain.chain.n }</span>` : '' );
 			this.set( 'buffs', buffs, true );
 			this.set( 'runcash', '+' + formatMoney( g.run ? g.run.coins : 0 ) );
 
@@ -828,7 +851,7 @@ export class UI {
 	navText( h ) {
 
 		const g = this.game;
-		if ( g.vehicle === 'starship' && g.mode === 'space' ) {
+		if ( isShip( g.vehicle ) && g.mode === 'space' ) {
 
 			const km = g.s.d / 1000;
 			let i = legAt( km );

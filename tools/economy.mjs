@@ -3,8 +3,9 @@
 // when each milestone is reached (runs and play time). Pickups are approximated: a steady trickle
 // of coins worth the current zone's coin value, and no fuel pickups (a conservative player).
 import { computeStats, UPGRADES, VEHICLES, defaultLevels } from '../src/game/Upgrades.js';
-import { createState, step, createRocketState, stepRocket, createShipState, stepShip } from '../src/game/Physics.js';
+import { createState, step, createRocketState, stepRocket } from '../src/game/Physics.js';
 import { ZONES, zoneAt, altitudePay, formatAltitude, formatMoney } from '../src/game/Zones.js';
+import { flyShip } from './shipsim.mjs';
 
 const COINS_PER_SECOND = Number( process.argv[ 2 ] || 0.9 );
 
@@ -54,19 +55,13 @@ function fly( levels, v ) {
 
 	}
 
-	const s = createShipState( st );
-	while ( t < 400 ) {
-
-		stepShip( s, st, { burn: true }, dt, 0 ); t += dt; track( s.d );
-		if ( s.fuel <= 0 ) break;
-
-	}
-
-	return { h: s.d, t: t + 6, coins, zones: zonesSeen };
+	void st;
+	const r = flyShip( levels, v, { onStep: ( s ) => track( s.d ) } );
+	return { h: r.h, t: r.t + 8, coins, zones: zonesSeen, end: r.end };
 
 }
 
-const save = { cash: 0, levels: defaultLevels(), unlocked: [ 'balloon' ], zones: new Set( [ 'shore' ] ), best: { balloon: 0, rocket: 0, starship: 0 } };
+const save = { cash: 0, levels: defaultLevels(), unlocked: [ 'balloon' ], zones: new Set( [ 'shore' ] ), best: { balloon: 0, rocket: 0, starship: 0, warpship: 0, ark: 0 } };
 let runs = 0, time = 0;
 const milestones = [];
 const seen = new Set();
@@ -78,7 +73,7 @@ const note = ( what ) => {
 
 };
 
-while ( runs < 400 ) {
+while ( runs < 600 ) {
 
 	const v = save.unlocked[ save.unlocked.length - 1 ];
 	const r = fly( save.levels, v );
@@ -100,7 +95,7 @@ while ( runs < 400 ) {
 	if ( r.h > save.best[ v ] && save.best[ v ] > 0 ) pay += Math.max( 0, altitudePay( r.h ) - altitudePay( save.best[ v ] ) ) * 0.25;
 	save.best[ v ] = Math.max( save.best[ v ], r.h );
 	save.cash += pay;
-	if ( save.zones.has( 'blackhole' ) ) {
+	if ( r.end === 'victory' ) {
 
 		note( 'WON' );
 		break;

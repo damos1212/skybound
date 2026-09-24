@@ -14,7 +14,19 @@ export const VEHICLES = [
 		id: 'starship', name: 'Starship', blurb: 'Leave orbit behind: the Moon, Mars, the Sun, and beyond.',
 		unlock: { zone: 'leo', cost: 400000, text: 'Reach Low Orbit' },
 	},
+	{
+		id: 'warpship', name: 'Warpship', blurb: 'Fold space. Jump past the planets to other stars, nebulae and the heart of the galaxy.',
+		unlock: { zone: 'alphacen', cost: 30000000, text: 'Reach Alpha Centauri' },
+	},
+	{
+		id: 'ark', name: 'Infinity Ark', blurb: 'A captive black hole for an engine. Dive through Sagittarius A* and cross the universe.',
+		unlock: { zone: 'blackhole', cost: 2500000000, text: 'Reach Sagittarius A*' },
+	},
 ];
+
+// the space vehicles (route distance instead of altitude)
+export const SHIPS = [ 'starship', 'warpship', 'ark' ];
+export const isShip = ( v ) => SHIPS.includes( v );
 
 export const VEHICLE_BY_ID = Object.fromEntries( VEHICLES.map( ( v ) => [ v.id, v ] ) );
 
@@ -225,10 +237,152 @@ export const UPGRADES = {
 		},
 		{
 			id: 'improbability', name: 'Improbability Drive', icon: 'infinity',
-			blurb: 'Technically impossible. Required for the centre of the galaxy.',
+			blurb: 'Technically impossible. Past Pluto every burn counts double: the way to another star.',
 			levels: [ { name: 'Not installed', cost: 0 }, { name: 'Installed', cost: 12000000 } ],
 		},
 		...shared( [ 120000, 360000, 800000, 300000, 1200000 ] ),
+	],
+
+	warpship: [
+		{
+			id: 'core', name: 'Warp Core', icon: 'core',
+			blurb: 'Folds space harder: every second of burn multiplies your speed more.',
+			levels: [
+				{ name: 'Dilithium Spark', cost: 0, boost: 0.26 },
+				{ name: 'Twin Coil', cost: 25e6, boost: 0.28 },
+				{ name: 'Tachyon Loop', cost: 60e6, boost: 0.3 },
+				{ name: 'Folded Lattice', cost: 140e6, boost: 0.32 },
+				{ name: 'Hawking Heart', cost: 320e6, boost: 0.34 },
+			],
+		},
+		{
+			id: 'pods', name: 'Antimatter Pods', icon: 'cell',
+			blurb: 'More antimatter: burn for longer.',
+			levels: [
+				{ name: 'Magnetic Bottle', cost: 0, fuel: 42 },
+				{ name: 'Penning Trap', cost: 20e6, fuel: 44 },
+				{ name: 'Positron Vault', cost: 50e6, fuel: 46 },
+				{ name: 'Mirror Tanks', cost: 120e6, fuel: 48 },
+				{ name: 'Vacuum Well', cost: 280e6, fuel: 50 },
+			],
+		},
+		{
+			id: 'capacitor', name: 'Jump Capacitor', icon: 'jump',
+			blurb: 'Hyperjump charges: press SHIFT to leap ahead, passing through anything.',
+			levels: [
+				{ name: 'Single Charge', cost: 0, jumps: 1 },
+				{ name: 'Twin Bank', cost: 45e6, jumps: 2 },
+				{ name: 'Triple Stack', cost: 180e6, jumps: 3 },
+			],
+		},
+		{
+			id: 'gravitic', name: 'Gravitic Thrusters', icon: 'fins',
+			blurb: 'Snappier sideways dodging.',
+			levels: [
+				{ name: 'Vector Vanes', cost: 0, steer: 26 },
+				{ name: 'Graviton Fins', cost: 18e6, steer: 34 },
+				{ name: 'Inertia Skates', cost: 55e6, steer: 44 },
+			],
+		},
+		{
+			id: 'deflector', name: 'Deflector Dish', icon: 'hull',
+			blurb: 'A glowing dish that shrugs off impacts.',
+			levels: [
+				{ name: 'Navigational', cost: 0, hull: 4 },
+				{ name: 'Particle Screen', cost: 22e6, hull: 5 },
+				{ name: 'Graviton Wall', cost: 70e6, hull: 6 },
+				{ name: 'Phase Barrier', cost: 200e6, hull: 8 },
+			],
+		},
+		{
+			id: 'screen', name: 'Radiation Screen', icon: 'heatshield',
+			blurb: 'Keeps the heat of giant stars out. Betelgeuse will cook an unscreened ship.',
+			levels: [
+				{ name: 'Lead Paint', cost: 0, heat: 1.0 },
+				{ name: 'Magnetosphere', cost: 28e6, heat: 0.6 },
+				{ name: 'Plasma Mirror', cost: 85e6, heat: 0.35 },
+				{ name: 'Starlight Diverter', cost: 220e6, heat: 0.15 },
+			],
+		},
+		{
+			id: 'tuner', name: 'Ring Tuner', icon: 'ring',
+			blurb: 'Warp rings give a bigger kick.',
+			levels: [
+				{ name: 'Stock', cost: 0, ring: 1 },
+				{ name: 'Resonant', cost: 20e6, ring: 1.5 },
+				{ name: 'Harmonic', cost: 90e6, ring: 2 },
+			],
+		},
+		...shared( [ 15e6, 45e6, 120e6, 35e6, 140e6 ] ),
+	],
+
+	ark: [
+		{
+			id: 'singularity', name: 'Singularity Core', icon: 'core',
+			blurb: 'Feed the captive black hole: every second of burn multiplies your speed more.',
+			levels: [
+				{ name: 'Kugelblitz', cost: 0, boost: 0.28 },
+				{ name: 'Spinning Kerr', cost: 3e9, boost: 0.3 },
+				{ name: 'Twin Horizons', cost: 8e9, boost: 0.32 },
+				{ name: 'Naked Singularity', cost: 20e9, boost: 0.34 },
+				{ name: 'Baby Universe', cost: 50e9, boost: 0.36 },
+			],
+		},
+		{
+			id: 'darktanks', name: 'Dark Energy Tanks', icon: 'cell',
+			blurb: 'Bottled dark energy: burn for longer.',
+			levels: [
+				{ name: 'Vacuum Flask', cost: 0, fuel: 46 },
+				{ name: 'Casimir Stack', cost: 2.5e9, fuel: 49 },
+				{ name: 'False Vacuum', cost: 6e9, fuel: 52 },
+				{ name: 'Brane Reservoir', cost: 16e9, fuel: 55 },
+				{ name: 'Big Bang Bottle', cost: 40e9, fuel: 58 },
+			],
+		},
+		{
+			id: 'capacitor', name: 'Wormhole Bank', icon: 'jump',
+			blurb: 'Hyperjump charges: press SHIFT to leap ahead, passing through anything.',
+			levels: [
+				{ name: 'One Wormhole', cost: 0, jumps: 1 },
+				{ name: 'Two Wormholes', cost: 5e9, jumps: 2 },
+				{ name: 'Three Wormholes', cost: 18e9, jumps: 3 },
+			],
+		},
+		{
+			id: 'dampers', name: 'Inertial Dampers', icon: 'fins',
+			blurb: 'Turn on a dime at a trillion times light speed.',
+			levels: [
+				{ name: 'Gyro Rings', cost: 0, steer: 30 },
+				{ name: 'Gravity Keel', cost: 2e9, steer: 40 },
+				{ name: 'Frame Dragger', cost: 7e9, steer: 50 },
+			],
+		},
+		{
+			id: 'hullark', name: 'Neutronium Hull', icon: 'hull',
+			blurb: 'Plating made of star cores.',
+			levels: [
+				{ name: 'Starsteel', cost: 0, hull: 5 },
+				{ name: 'Neutronium', cost: 3e9, hull: 6 },
+				{ name: 'Quark Weave', cost: 9e9, hull: 7 },
+				{ name: 'Cosmic String', cost: 24e9, hull: 9 },
+			],
+		},
+		{
+			id: 'lens', name: 'Lens Shield', icon: 'heatshield',
+			blurb: 'Bends away quasar light and the glare of the Big Bang.',
+			levels: [
+				{ name: 'Sunglasses', cost: 0, heat: 1.0 },
+				{ name: 'Gravity Lens', cost: 3.5e9, heat: 0.55 },
+				{ name: 'Einstein Ring', cost: 11e9, heat: 0.3 },
+				{ name: 'Event Veil', cost: 28e9, heat: 0.12 },
+			],
+		},
+		{
+			id: 'anchor', name: 'Reality Anchor', icon: 'infinity',
+			blurb: 'Keeps you in one piece at the edge of everything. Needed to cross the Edge.',
+			levels: [ { name: 'Not installed', cost: 0 }, { name: 'Installed', cost: 150e9 } ],
+		},
+		...shared( [ 2e9, 6e9, 15e9, 4e9, 16e9 ] ),
 	],
 };
 
@@ -289,6 +443,39 @@ export function computeStats( levels, vehicle ) {
 
 	}
 
+	if ( vehicle === 'warpship' ) {
+
+		return {
+			...common,
+			boost: L( 'core' ).boost,
+			fuel: L( 'pods' ).fuel,
+			steer: L( 'gravitic' ).steer,
+			hull: L( 'deflector' ).hull,
+			heat: L( 'screen' ).heat,
+			jumps: L( 'capacitor' ).jumps,
+			ring: L( 'tuner' ).ring,
+			regen: 0,
+		};
+
+	}
+
+	if ( vehicle === 'ark' ) {
+
+		return {
+			...common,
+			boost: L( 'singularity' ).boost,
+			fuel: L( 'darktanks' ).fuel,
+			steer: L( 'dampers' ).steer,
+			hull: L( 'hullark' ).hull,
+			heat: L( 'lens' ).heat,
+			jumps: L( 'capacitor' ).jumps,
+			ring: 1.5,
+			regen: 0,
+			anchor: ( ( levels.ark || {} ).anchor || 0 ) > 0,
+		};
+
+	}
+
 	return {
 		...common,
 		boost: L( 'drive' ).boost,
@@ -298,6 +485,8 @@ export function computeStats( levels, vehicle ) {
 		heat: L( 'heatshield' ).heat,
 		regen: L( 'sails' ).regen,
 		warp: ( ( levels.starship || {} ).improbability || 0 ) > 0,
+		jumps: 0,
+		ring: 1,
 	};
 
 }

@@ -38,14 +38,27 @@ const TYPES = {
 	satellite: { min: 150000, max: 4.2e7, weight: 2.2, damage: 2 },
 	debris: { min: 200000, max: 4.2e7, weight: 2.6, damage: 1 },
 	// ---- deep space
-	asteroid: { zones: [ 'cislunar', 'moon', 'mars', 'jupiter' ], weight: 2.5, damage: 2 },
-	flare: { zones: [ 'sun' ], weight: 3, damage: 2 },
-	ice: { zones: [ 'saturn', 'neptune', 'kuiper' ], weight: 3, damage: 1 },
-	comet: { zones: [ 'jupiter', 'saturn', 'neptune', 'kuiper', 'interstellar' ], weight: 1.4, damage: 2, warn: true },
-	spaceufo: { zones: [ 'mars', 'kuiper', 'interstellar', 'blackhole' ], weight: 1, damage: 2 },
-	whale: { zones: [ 'neptune', 'kuiper', 'interstellar' ], weight: 0.5, damage: 3 },
-	spacedebris: { zones: [ 'moon', 'mars', 'sun', 'jupiter', 'saturn', 'neptune', 'kuiper', 'interstellar', 'blackhole' ], weight: 1.5, damage: 1 },
+	asteroid: { zones: [ 'cislunar', 'moon', 'mars', 'jupiter', 'alphacen', 'trappist' ], weight: 2.5, damage: 2 },
+	flare: { zones: [ 'sun', 'alphacen', 'betelgeuse' ], weight: 3, damage: 2 },
+	ice: { zones: [ 'saturn', 'neptune', 'kuiper', 'trappist' ], weight: 3, damage: 1 },
+	comet: { zones: [ 'jupiter', 'saturn', 'neptune', 'kuiper', 'interstellar', 'alphacen', 'trappist' ], weight: 1.4, damage: 2, warn: true },
+	spaceufo: { zones: [ 'mars', 'kuiper', 'interstellar', 'blackhole', 'trappist', 'orion', 'crab', 'halo', 'omegacen', 'lmc', 'andromeda', 'virgo', 'laniakea' ], weight: 1, damage: 2 },
+	whale: { zones: [ 'neptune', 'kuiper', 'interstellar', 'orion', 'lmc', 'andromeda', 'elgordo' ], weight: 0.6, damage: 3 },
+	spacedebris: { zones: [ 'moon', 'mars', 'sun', 'jupiter', 'saturn', 'neptune', 'kuiper', 'interstellar', 'blackhole', 'alphacen', 'trappist' ], weight: 1.5, damage: 1 },
+	// ---- other stars, nebulae and the galactic centre
+	plasmoid: { zones: [ 'alphacen', 'betelgeuse', 'crab', 'blackhole' ], weight: 2.4, damage: 2 },
+	beam: { zones: [ 'crab' ], weight: 3.2, damage: 2, warn: true },
+	protostar: { zones: [ 'orion' ], weight: 2.8, damage: 2 },
+	hvstar: { zones: [ 'blackhole', 'halo', 'omegacen', 'lmc', 'andromeda' ], weight: 1.6, damage: 3, warn: true },
+	// ---- between the galaxies
+	darkmatter: { zones: [ 'halo', 'omegacen', 'lmc', 'andromeda', 'virgo', 'laniakea', 'quasar', 'elgordo', 'edge' ], weight: 2.4, damage: 2 },
+	mothership: { zones: [ 'lmc', 'andromeda', 'virgo', 'quasar' ], weight: 0.9, damage: 3, warn: true },
+	cstring: { zones: [ 'laniakea', 'elgordo', 'edge' ], weight: 2.2, damage: 2 },
+	jetburst: { zones: [ 'virgo', 'quasar' ], weight: 1.8, damage: 2 },
 };
+
+// energy colours by hazard (and zone)
+const ENERGY = { plasmoid: [ 1, 0.5, 0.12 ], plasmoidBlue: [ 0.4, 0.6, 1 ], plasmoidPink: [ 1, 0.35, 0.8 ], beam: [ 0.55, 0.75, 1 ], protostar: [ 1, 0.75, 0.9 ], jet: [ 0.6, 0.8, 1 ], hvstar: [ 1, 0.9, 0.7 ], cstring: [ 0.7, 0.4, 1 ], jetburst: [ 0.55, 0.6, 1 ] };
 
 function pickType( h, zoneId, night, rnd ) {
 
@@ -139,6 +152,7 @@ export class Hazards {
 		this.nextStarY = startY + 700;
 		this.nextOrbY = startY + 400;
 		this.nextSpecialY = startY + 300;
+		this.nextRingY = startY + 160;
 		this.issDone = false;
 
 	}
@@ -214,6 +228,19 @@ export class Hazards {
 				const kind = z.space ? ( roll < 0.45 ? 'crystal' : roll < 0.75 ? 'probe' : 'astronaut' ) : roll < 0.6 ? 'astronaut' : 'crystal';
 				this._spawnPickup( kind, this.nextSpecialY, player, view, z.coin * ( kind === 'crystal' ? 12 : 40 ), ctx );
 				this.nextSpecialY += 700 + this.rnd() * 900;
+
+			}
+
+			// warp ring chains for the space vehicles
+			if ( ctx.ship ) {
+
+				guard = 0;
+				while ( this.nextRingY < ahead && guard ++ < 2 ) {
+
+					this._spawnRingChain( this.nextRingY, player, view, zoneAt( realAt( this.nextRingY ) ) );
+					this.nextRingY += 280 + this.rnd() * 240;
+
+				}
 
 			}
 
@@ -547,6 +574,17 @@ export class Hazards {
 
 			}
 
+			case 'plasmoid':
+			case 'beam':
+			case 'protostar':
+			case 'hvstar':
+			case 'darkmatter':
+			case 'mothership':
+			case 'cstring':
+			case 'jetburst':
+				this._spawnCosmic( type, item, g, player, view, ctx, side, crossX );
+				break;
+
 			case 'flare': {
 
 				// a looping prominence arching over the path, dangerous while it pulses bright
@@ -576,6 +614,188 @@ export class Hazards {
 
 	}
 
+	_energy( tint, k = 1 ) {
+
+		const m = mats().energy.clone();
+		m.set( 'tint', tint );
+		m.set( 'k', k );
+		return m;
+
+	}
+
+	_glowMesh( geo, mat ) {
+
+		const m = mesh( geo, mat, false );
+		m.layers.set( 2 );
+		return m;
+
+	}
+
+	// beyond the solar system
+	_spawnCosmic( type, item, g, player, view, ctx, side, crossX ) {
+
+		const M = models(), X = mats(), r = this.rnd, local = { local: true };
+		const zone = zoneAt( ctx.h ).id;
+		switch ( type ) {
+
+			case 'plasmoid': {
+
+				item.x = this._placeX( player, view, item.y, 1.0, local );
+				item.vx = ( r() - 0.5 ) * 16;
+				item.vy = ( r() - 0.5 ) * 6;
+				const tint = zone === 'crab' ? ENERGY.plasmoidBlue : zone === 'blackhole' ? ENERGY.plasmoidPink : ENERGY.plasmoid;
+				const m = this._glowMesh( M.plasmoid, this._energy( tint ) );
+				g.add( m );
+				item.parts.core = m;
+				item.pulse = r() * 6;
+				g.scale.setScalar( 0.8 + r() * 0.8 );
+				item.circles.push( { ox: 0, oy: 0, r: 2.1 } );
+				break;
+
+			}
+
+			case 'beam': {
+
+				// a pulsar beam sweeping across the path from a pivot beside the screen
+				item.x = player.x + side * ( view.halfW + 12 );
+				item.len = view.halfW * 2 + 30;
+				item.theta = side > 0 ? Math.PI + ( r() - 0.5 ) * 2 : ( r() - 0.5 ) * 2;
+				item.omega = ( r() < 0.5 ? - 1 : 1 ) * ( 1.0 + r() * 0.5 );
+				const bm = this._glowMesh( M.beam, this._energy( ENERGY.beam ) );
+				bm.scale.set( 1.3, item.len, 1.3 );
+				g.add( bm );
+				g.add( this._glowMesh( M.beamCore, this._energy( [ 0.8, 0.9, 1 ], 1.5 ) ) );
+				item.parts.beam = bm;
+				for ( let i = 1; i <= 24; i ++ ) item.circles.push( { ox: 0, oy: 0, r: 1.7, d: i / 24 * item.len } );
+				break;
+
+			}
+
+			case 'protostar': {
+
+				// a newborn star firing twin jets that switch on and off
+				item.x = this._placeX( player, view, item.y, 0.7, local );
+				item.vx = ( r() - 0.5 ) * 6;
+				const core = this._glowMesh( M.plasmoid, this._energy( ENERGY.protostar ) );
+				core.scale.setScalar( 1.1 );
+				g.add( core );
+				const a = ( r() - 0.5 ) * 1.0;
+				item.jets = [];
+				for ( const dir of [ 0, Math.PI ] ) {
+
+					const j = this._glowMesh( M.beam, this._energy( ENERGY.jet ) );
+					j.scale.set( 0.9, 20, 0.9 );
+					j.rotation.z = a + dir - Math.PI / 2;
+					g.add( j );
+					item.jets.push( j );
+					for ( let i = 1; i <= 7; i ++ ) item.circles.push( { ox: Math.cos( a + dir ) * ( 2 + i * 2.6 ), oy: Math.sin( a + dir ) * ( 2 + i * 2.6 ), r: 1.2 + i * 0.12, jet: true } );
+
+				}
+
+				item.pulse = r() * 3;
+				item.circles.push( { ox: 0, oy: 0, r: 2.6 } );
+				break;
+
+			}
+
+			case 'hvstar': {
+
+				crossX( 140 + r() * 60 );
+				item.vy = ( r() - 0.5 ) * 10;
+				const m = this._glowMesh( M.beamCore, this._energy( ENERGY.hvstar, 1.4 ) );
+				m.scale.setScalar( 2.2 );
+				g.add( m );
+				item.circles.push( { ox: 0, oy: 0, r: 2.4 } );
+				break;
+
+			}
+
+			case 'darkmatter': {
+
+				item.x = this._placeX( player, view, item.y, 0.9, local );
+				item.vx = ( r() - 0.5 ) * 8;
+				item.vy = ( r() - 0.5 ) * 4;
+				const m = this._glowMesh( M.blob, X.dark.clone() );
+				g.add( m );
+				item.parts.blob = m;
+				g.scale.setScalar( 0.9 + r() * 0.9 );
+				item.circles.push( { ox: 0, oy: 0, r: 3.5 } );
+				break;
+
+			}
+
+			case 'mothership': {
+
+				crossX( 12 + r() * 8 );
+				const m = mesh( M.mothership, X.metal );
+				g.add( m );
+				const lights = mesh( M.mothershipLights, X.glow, false );
+				g.add( lights );
+				item.parts.ship = m;
+				item.parts.lights = lights;
+				item.wobble = r() * 6;
+				for ( let i = - 3; i <= 3; i ++ ) item.circles.push( { ox: i * 3.2, oy: 0, r: 2.6 } );
+				item.circles.push( { ox: 0, oy: 1.8, r: 3.5 } );
+				break;
+
+			}
+
+			case 'cstring': {
+
+				// a cosmic string across the whole path, with one gap to thread
+				item.x = player.x + ( r() * 2 - 1 ) * view.halfW * 0.45;
+				item.vx = ( r() - 0.5 ) * 8;
+				const W = view.halfW * 2 + 60, gap = 9;
+				const mat = this._energy( ENERGY.cstring );
+				for ( const sx of [ - 1, 1 ] ) {
+
+					const b = this._glowMesh( M.beam, mat );
+					b.scale.set( 0.5, W, 0.5 );
+					b.position.x = sx * gap;
+					b.rotation.z = - sx * Math.PI / 2;
+					g.add( b );
+					for ( let d = 0; d < W; d += 2.6 ) item.circles.push( { ox: sx * ( gap + d ), oy: 0, r: 1.1 } );
+
+				}
+
+				item.parts.mat = mat;
+				break;
+
+			}
+
+			case 'jetburst': {
+
+				// a relativistic jet flaring across the path: dim while it charges, deadly when lit
+				item.x = this._placeX( player, view, item.y, 0.5, local );
+				const a = side * ( 0.3 + r() * 0.5 ) + Math.PI / 2;
+				const len = view.halfW * 1.6 + 30;
+				const j = this._glowMesh( M.beam, this._energy( ENERGY.jetburst, 0.2 ) );
+				j.scale.set( 2.2, len, 2.2 );
+				j.position.set( - Math.cos( a ) * len / 2, - Math.sin( a ) * len / 2, 0 );
+				j.rotation.z = a - Math.PI / 2;
+				g.add( j );
+				item.parts.jet = j;
+				item.pulse = r() * 4;
+				for ( let d = - len / 2; d <= len / 2; d += 3 ) item.circles.push( { ox: Math.cos( a ) * d, oy: Math.sin( a ) * d, r: 2.2, jet: true } );
+				break;
+
+			}
+
+		}
+
+	}
+
+	_spawnRingChain( y, player, view, zone ) {
+
+		const r = this.rnd;
+		const n = 4 + Math.floor( r() * 3 );
+		const chain = { n, got: 0 };
+		const x0 = player.x + ( r() * 2 - 1 ) * view.halfW * 0.4;
+		const amp = view.halfW * ( 0.12 + r() * 0.28 ), ph = r() * 6;
+		for ( let i = 0; i < n; i ++ ) this._addPickup( 'ring', x0 + Math.sin( ph + i * 0.9 ) * amp, y + i * 26, zone.coin * 3, chain );
+
+	}
+
 	_spawnCoins( y, player, view, zone, ctx ) {
 
 		const r = this.rnd;
@@ -598,7 +818,7 @@ export class Hazards {
 
 	}
 
-	_addPickup( kind, x, y, value ) {
+	_addPickup( kind, x, y, value, chain = null ) {
 
 		const M = models(), X = mats();
 		let m;
@@ -610,13 +830,14 @@ export class Hazards {
 			case 'astronaut': m = mesh( M.astronaut, X.paint ); m.scale.setScalar( 1.4 ); break;
 			case 'probe': m = mesh( M.probe, X.paint ); break;
 			case 'crystal': m = mesh( M.crystal, X.crystal ); m.scale.setScalar( 1.3 ); break;
+			case 'ring': m = mesh( M.ring, X.ring, false ); m.layers.set( 2 ); m.rotation.x = 1.15; break;
 			default: m = mesh( M.orb, this.orbMats[ kind ], false ); m.layers.set( 2 ); break;
 
 		}
 
 		m.position.set( x, y, 0 );
 		this.group.add( m );
-		this.pickups.push( { kind, x, y, value, mesh: m, t: this.rnd() * 6, r: kind === 'coin' ? 1.3 : 2.2, alive: true } );
+		this.pickups.push( { kind, x, y, value, mesh: m, t: this.rnd() * 6, r: kind === 'coin' ? 1.3 : kind === 'ring' ? 3.0 : 2.2, alive: true, chain } );
 
 	}
 
@@ -761,6 +982,81 @@ export class Hazards {
 					h.parts.whale.rotation.z = Math.sin( h.t * 0.8 ) * 0.1;
 					h.y += Math.sin( h.t * 0.8 ) * 0.08;
 					break;
+				case 'plasmoid': {
+
+					const k = 0.75 + 0.25 * Math.sin( h.t * 5 + h.pulse );
+					h.parts.core.material.set( 'k', k );
+					h.parts.core.rotation.set( h.t * 0.7, h.t, 0 );
+					if ( P && Math.random() < 0.3 ) P.emit( { x: h.x + ( Math.random() - 0.5 ) * 3, y: h.y + ( Math.random() - 0.5 ) * 3, z: 0, vx: ( Math.random() - 0.5 ) * 6, vy: ( Math.random() - 0.5 ) * 6, life: 0.5, size: 0.6, grow: 1.5, color: [ 8, 4, 1.5 ], drag: 1 } );
+					break;
+
+				}
+
+				case 'beam': {
+
+					h.theta += h.omega * dt;
+					const c = Math.cos( h.theta ), sn = Math.sin( h.theta );
+					h.parts.beam.rotation.z = h.theta - Math.PI / 2;
+					h.parts.beam.material.set( 'k', 0.8 + 0.2 * Math.sin( h.t * 30 ) );
+					for ( const q of h.circles ) {
+
+						q.ox = c * q.d;
+						q.oy = sn * q.d;
+
+					}
+
+					break;
+
+				}
+
+				case 'protostar': {
+
+					const k = 0.5 + 0.5 * Math.sin( h.t * 1.5 + h.pulse );
+					for ( const j of h.jets ) {
+
+						j.material.set( 'k', 0.15 + k * 0.95 );
+						j.scale.y = 12 + k * 10;
+
+					}
+
+					for ( const q of h.circles ) if ( q.jet ) q.off = k < 0.45;
+					h.mesh.children[ 0 ].rotation.set( h.t, h.t * 0.6, 0 );
+					break;
+
+				}
+
+				case 'hvstar':
+					if ( P ) for ( let i = 0; i < 2; i ++ ) P.emit( { x: h.x - Math.sign( h.vx ) * i * 1.5, y: h.y + ( Math.random() - 0.5 ), z: - 0.5, vx: - h.vx * 0.05, life: 0.9, size: 1.8, grow: 1.2, color: [ 10, 8, 5 ], drag: 0.5, fade: 1.2 } );
+					break;
+				case 'darkmatter': {
+
+					const d = Math.hypot( h.x - player.x, h.y - player.y );
+					h.parts.blob.material.set( 'reveal', Math.max( 0.12, Math.min( 1, 1 - ( d - 12 ) / 55 ) ) );
+					h.parts.blob.rotation.set( h.t * 0.3, h.t * 0.5, 0 );
+					h.parts.blob.scale.set( 1 + Math.sin( h.t * 2 ) * 0.08, 1 + Math.cos( h.t * 1.7 ) * 0.08, 1 );
+					break;
+
+				}
+
+				case 'mothership':
+					h.y += Math.sin( h.t * 0.9 + h.wobble ) * 0.05;
+					h.parts.lights.rotation.y = h.t * 0.8;
+					h.mesh.rotation.x = Math.sin( h.t * 0.5 ) * 0.06;
+					break;
+				case 'cstring':
+					h.parts.mat.set( 'k', 0.8 + 0.2 * Math.sin( h.t * 12 ) );
+					h.mesh.position.z = 0;
+					break;
+				case 'jetburst': {
+
+					const cyc = ( h.t * 0.5 + h.pulse ) % 2;
+					const lit = cyc > 1.2 && cyc < 1.95;
+					h.parts.jet.material.set( 'k', lit ? 1 : 0.12 + ( cyc < 1.2 ? cyc / 1.2 : 0 ) * 0.25 );
+					for ( const q of h.circles ) q.off = ! lit;
+					break;
+
+				}
+
 				case 'flare': {
 
 					const k = 0.5 + 0.5 * Math.sin( h.t * 1.6 + h.pulse );
@@ -794,6 +1090,7 @@ export class Hazards {
 				case 'probe': p.mesh.rotation.set( 0.3, p.t * 0.3, 0.2 ); break;
 				case 'crystal': p.mesh.rotation.set( 0, p.t * 2, 0 ); p.mesh.scale.setScalar( 1.3 + Math.sin( p.t * 4 ) * 0.1 ); break;
 				case 'star': p.mesh.rotation.set( p.t, p.t * 1.3, 0 ); p.mesh.scale.setScalar( 1 + Math.sin( p.t * 5 ) * 0.12 ); break;
+				case 'ring': p.mesh.scale.setScalar( 1 + Math.sin( p.t * 4 ) * 0.05 ); p.mesh.rotation.z = p.t * 0.6; break;
 				default: p.mesh.scale.setScalar( 1 + Math.sin( p.t * 6 ) * 0.1 ); break;
 
 			}
@@ -807,7 +1104,7 @@ export class Hazards {
 
 			p.mesh.position.set( p.x, p.y, 0 );
 			if ( p.y < keepBelow ) p.alive = false;
-			if ( P && Math.random() < ( p.kind === 'coin' ? 0.02 : 0.08 ) ) P.emit( { x: p.x + ( Math.random() - 0.5 ) * 2, y: p.y + ( Math.random() - 0.5 ) * 2, z: 0.5, life: 0.5, size: 0.35, color: p.kind === 'coin' ? [ 6, 4.5, 1 ] : [ 3, 3, 4 ], fade: 1 } );
+			if ( P && p.kind !== 'ring' && Math.random() < ( p.kind === 'coin' ? 0.02 : 0.08 ) ) P.emit( { x: p.x + ( Math.random() - 0.5 ) * 2, y: p.y + ( Math.random() - 0.5 ) * 2, z: 0.5, life: 0.5, size: 0.35, color: p.kind === 'coin' ? [ 6, 4.5, 1 ] : [ 3, 3, 4 ], fade: 1 } );
 
 		}
 
@@ -850,7 +1147,7 @@ export class Hazards {
 		}
 
 		for ( const p of this.pickups ) p.y -= dy;
-		this.nextHazardY -= dy; this.nextCoinY -= dy; this.nextFuelY -= dy; this.nextStarY -= dy; this.nextOrbY -= dy; this.nextSpecialY -= dy;
+		this.nextHazardY -= dy; this.nextCoinY -= dy; this.nextFuelY -= dy; this.nextStarY -= dy; this.nextOrbY -= dy; this.nextSpecialY -= dy; this.nextRingY -= dy;
 
 	}
 
@@ -922,7 +1219,7 @@ export class Hazards {
 		for ( const p of this.pickups ) {
 
 			if ( ! p.alive ) continue;
-			if ( magnet > 0 ) {
+			if ( magnet > 0 && p.kind !== 'ring' ) {
 
 				const dx = center.x - p.x, dy = center.y - p.y;
 				const d = Math.hypot( dx, dy );

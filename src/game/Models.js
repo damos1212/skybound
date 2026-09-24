@@ -265,6 +265,31 @@ export function models() {
 	M.whale = whale.build();
 	M.flare = T().add( new TorusGeometry( 16, 2.4, 10, 40, Math.PI ), { color: 0xffffff } ).build();
 
+	// ---- beyond the solar system
+	M.plasmoid = T().add( new IcosahedronGeometry( 2.4, 2 ), { color: 0xffffff } ).build();
+	// a unit beam along +y (scaled at runtime): pulsar beams, protostar jets, cosmic strings
+	M.beam = T().add( new CylinderGeometry( 1, 1, 1, 14, 1, true ), { position: [ 0, 0.5, 0 ], color: 0xffffff } ).build();
+	M.beamCore = T().add( new SphereGeometry( 1, 16, 12 ), { color: 0xffffff } ).build();
+	M.blob = T().add( new IcosahedronGeometry( 4.2, 3 ), { color: 0xffffff } ).build();
+	const ms = T();
+	ms.add( new SphereGeometry( 11, 40, 12 ), { scale: [ 1, 0.22, 1 ], color: 0x6f7a86 } );
+	ms.add( new SphereGeometry( 5, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2 ), { position: [ 0, 1.6, 0 ], scale: [ 1, 0.7, 1 ], color: 0x3b3f48 } );
+	ms.add( new TorusGeometry( 10.4, 0.5, 8, 56 ), { rotation: [ Math.PI / 2, 0, 0 ], color: 0x2b2f36 } );
+	for ( let i = 0; i < 6; i ++ ) {
+
+		const a = i / 6 * Math.PI * 2;
+		ms.add( new BoxGeometry( 3, 1.2, 1.4 ), { position: [ Math.cos( a ) * 8, - 1.4, Math.sin( a ) * 8 ], rotation: [ 0, - a, 0 ], color: 0x8f9aa6 } );
+
+	}
+
+	M.mothership = ms.build();
+	const msl = T();
+	for ( let i = 0; i < 24; i ++ ) msl.add( new SphereGeometry( 0.45, 8, 6 ), { position: [ Math.cos( i / 24 * Math.PI * 2 ) * 10.2, - 0.8, Math.sin( i / 24 * Math.PI * 2 ) * 10.2 ], color: i % 3 ? 0x7fff9a : 0xff5ad0 } );
+	msl.add( new CylinderGeometry( 2.2, 3.2, 0.6, 24 ), { position: [ 0, - 2.4, 0 ], color: 0x9ff0ff } );
+	M.mothershipLights = msl.build();
+	// warp ring (a hoop to fly through)
+	M.ring = T().add( new TorusGeometry( 4.4, 0.32, 10, 56 ), { color: 0xffffff } ).build();
+
 	// ---- pickups
 	M.orb = T().add( new SphereGeometry( 1.2, 20, 14 ), { color: 0xffffff } ).build();
 	const astro = T();
@@ -329,6 +354,21 @@ export function mats() {
 			surface: 'let f = sat( abs( dot( in.N, in.V ) ) ); let n = 0.6 + 0.4 * sin( in.P.x * 0.7 + frame.time * 6.0 ) * sin( in.P.y * 0.9 - frame.time * 4.0 ); s.albedo = vec3f( 0.0 ); s.emissive = mix( vec3f( 30.0, 8.0, 1.5 ), vec3f( 40.0, 30.0, 12.0 ), f ) * n * mat.k; s.alpha = f * mat.k;',
 		} ),
 		crystal: new Material( { name: 'crystal', vertexColors: true, roughness: 0.05, metalness: 0.2, emissive: [ 0.1, 0.5, 0.7 ] } ),
+		// coloured energy (plasma balls, pulsar beams, jets, cosmic strings): clone per hazard, set tint / k
+		energy: new Material( {
+			name: 'energy', lit: false, transparent: true, depthWrite: false, blending: 'additive', uniforms: { k: [ 'f32', 1 ], tint: [ 'vec3f', [ 1, 1, 1 ] ] },
+			surface: 'let f = sat( abs( dot( in.N, in.V ) ) ); let n = 0.7 + 0.3 * sin( in.P.x * 0.9 + in.P.y * 0.6 + frame.time * 8.0 ); s.albedo = vec3f( 0.0 ); s.emissive = mix( mat.tint * 5.0, mat.tint * 8.0 + vec3f( 2.5 ), pow( f, 4.0 ) ) * n * mat.k; s.alpha = f * mat.k;',
+		} ),
+		// dark matter: nearly invisible until it is close (reveal)
+		dark: new Material( {
+			name: 'dark-matter', lit: false, transparent: true, depthWrite: false, uniforms: { reveal: [ 'f32', 0.2 ] },
+			surface: 'let f = pow( 1.0 - sat( abs( dot( in.N, in.V ) ) ), 2.0 ); let n = 0.6 + 0.4 * sin( in.P.x * 0.8 + frame.time * 2.0 ) * sin( in.P.y * 0.7 - frame.time * 1.5 ); s.albedo = vec3f( 0.0 ); s.emissive = vec3f( 0.7, 0.25, 1.6 ) * ( 0.25 + f * 4.0 ) * n * mat.reveal; s.alpha = ( 0.2 + f * 0.8 ) * mat.reveal;',
+		} ),
+		// warp rings
+		ring: new Material( {
+			name: 'warp-ring', lit: false, transparent: true, depthWrite: false, blending: 'additive', uniforms: { tint: [ 'vec3f', [ 0.35, 0.8, 1.0 ] ] },
+			surface: 'let f = sat( abs( dot( in.N, in.V ) ) ); let run = 0.65 + 0.35 * sin( atan2( in.P.y, in.P.x ) * 6.0 - frame.time * 10.0 ); s.albedo = vec3f( 0.0 ); s.emissive = mix( mat.tint * 3.5, vec3f( 6.0 ), f * f * f ) * run; s.alpha = 0.4 + f * 0.6;',
+		} ),
 	};
 	MATS.trail.side = 'double';
 	return MATS;

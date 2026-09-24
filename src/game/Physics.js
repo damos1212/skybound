@@ -6,6 +6,8 @@
 // ~5.5 km: every envelope has a ceiling where lift equals gravity. Quadratic drag (thinner up high)
 // sets the climb rate; the envelope acts as a parachute on the way down.
 
+import { LEGS, BODY_BY_ID } from './Route.js';
+
 export const G = 9.81;
 export const SCALE_HEIGHT = 8000;
 const LIFT_EXP = 0.62;
@@ -212,22 +214,35 @@ function MathClamp( v, a, b ) {
 
 }
 
-// ---------------------------------------------------------------------------------------- starship
+// ---------------------------------------------------------------------------------------- ships
 // Exponential flight: every second of burn multiplies the speed by e^boost, so the route's
 // astronomical distances fit in a minute of play. `d` is the path distance from the Earth's surface
-// (m); `x` the sideways position in the gameplay plane (dodging).
+// (m); `x` the sideways position in the gameplay plane (dodging). The Starship starts in low orbit;
+// the Warpship jumps out past the heliopause and the Infinity Ark through Sagittarius A* before
+// their runs begin. A hyperjump (`jumpT`) adds JUMP_EFOLDS of speed over JUMP_TIME seconds.
 
 export const ORBIT_START = 400000;
 export const ORBIT_SPEED = 7800;
 export const WARP_FROM = 6.0e12;
+export const IMPROBABILITY = 1.35;
+export const JUMP_EFOLDS = 1.2;
+export const JUMP_TIME = 1.2;
 
-export function createShipState( stats ) {
+const bh = BODY_BY_ID.blackhole;
+export const SHIP_START = {
+	starship: { d: ORBIT_START, v: ORBIT_SPEED },
+	warpship: { d: ( LEGS[ BODY_BY_ID.alphacen.leg ].start + 1.52e10 ) * 1000, v: 1.5e10 },
+	ark: { d: ( bh.at + 3 * bh.R ) * 1000, v: 4e14 },
+};
 
+export function createShipState( stats, vehicle = 'starship' ) {
+
+	const st = SHIP_START[ vehicle ] || SHIP_START.starship;
 	return {
 		x: 0, y: 0, vx: 0, vy: 0,
-		d: ORBIT_START, u: Math.log( ORBIT_SPEED ), v: ORBIT_SPEED,
-		fuel: stats.fuel, hull: stats.hull, heat: 0, leak: 0,
-		burning: false, popped: false, time: 0, maxY: ORBIT_START, kick: 0, bags: 0,
+		d: st.d, u: Math.log( st.v ), v: st.v,
+		fuel: stats.fuel, hull: stats.hull, heat: 0, leak: 0, jumps: stats.jumps || 0, jumpT: 0,
+		burning: false, popped: false, time: 0, maxY: st.d, kick: 0, bags: 0,
 	};
 
 }
@@ -239,7 +254,7 @@ export function stepShip( s, stats, input, dt, sunFlux = 0, maxAdvance = Infinit
 	s.time += dt;
 	s.burning = !! input.burn && s.fuel > 0 && ! s.popped;
 	let boost = stats.boost;
-	if ( stats.warp && s.d > WARP_FROM ) boost *= 10;
+	if ( stats.warp && s.d > WARP_FROM ) boost *= IMPROBABILITY;
 	if ( s.burning ) {
 
 		s.u += boost * dt;
@@ -256,6 +271,13 @@ export function stepShip( s, stats, input, dt, sunFlux = 0, maxAdvance = Infinit
 
 		s.u += Math.min( s.kick, dt * 2 ) * 0.15;
 		s.kick = Math.max( 0, s.kick - dt * 2 );
+
+	}
+
+	if ( s.jumpT > 0 ) {
+
+		s.u += JUMP_EFOLDS * Math.min( s.jumpT, dt ) / JUMP_TIME;
+		s.jumpT = Math.max( 0, s.jumpT - dt );
 
 	}
 

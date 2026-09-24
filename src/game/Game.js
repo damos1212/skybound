@@ -2,24 +2,32 @@ import { Vector3, MathUtils } from '../engine/math/index.js';
 import { Balloon } from './Balloon.js';
 import { Rocket, ROCKET_LIVERIES } from './Rocket.js';
 import { Starship, SHIP_LIVERIES } from './Starship.js';
+import { Warpship } from './Warpship.js';
+import { Ark } from './Ark.js';
 import { Hazards } from './Hazards.js';
 import { Input } from './Input.js';
-import { createState, step, dropBag, windAt, createRocketState, stepRocket, createShipState, stepShip, ORBIT_START } from './Physics.js';
-import { computeStats, defaultLevels, UPGRADES, VEHICLES, VEHICLE_BY_ID } from './Upgrades.js';
+import { createState, step, dropBag, windAt, createRocketState, stepRocket, createShipState, stepShip, ORBIT_START, SHIP_START, JUMP_TIME } from './Physics.js';
+import { computeStats, defaultLevels, UPGRADES, VEHICLES, VEHICLE_BY_ID, isShip } from './Upgrades.js';
 import { ZONES, zoneAt, zoneIndex, zoneById, altitudePay } from './Zones.js';
 import { ACHIEVEMENTS } from './Achievements.js';
 import { refreshMissions, missionProgress } from './Missions.js';
-import { routeAt, flybyAt, toWorld, BODIES, SUN, AU, ROUTE_LENGTH, norm, sub, len } from './Route.js';
+import { routeAt, flybyAt, toWorld, BODIES, BODY_BY_ID, AU, LY, GC, ROUTE_LENGTH, T as BT, norm, sub, len, dot, cross, mul } from './Route.js';
 import { LAUNCH, BARGE, islandHeight } from '../world/Island.js';
 import { TIMES_OF_DAY } from '../App.js';
+import { MAX_BODIES } from '../sky/Sky.js';
+
+const RING_KICK = 0.8;
+// hazards that stay dangerous after a hit, and what a hit says
+const LASTING = [ 'storm', 'flare', 'beam', 'protostar', 'cstring', 'jetburst' ];
+const HIT_TEXT = { storm: 'Zapped!', flare: 'Scorched!', beam: 'Pulsar beam!', protostar: 'Jet blast!', jetburst: 'Jet blast!', cstring: 'Cosmic string!', darkmatter: 'Dark matter!', hvstar: 'Star strike!', plasmoid: 'Plasma burn!' };
 import { UI } from '../ui/UI.js';
 import { Sound } from '../audio/Sound.js';
 import { Music } from '../audio/Music.js';
 
 // The game loop on top of App: hangar (vehicle select, workshop, paint shop, time of day), a launch
-// countdown, flight for the three vehicles, results. Keeps the save in localStorage.
+// countdown, flight for the five vehicles, results. Keeps the save in localStorage.
 //
-// Flight coordinates: the physics state `s` is real (metres; the Starship's `d` is its route
+// Flight coordinates: the physics state `s` is real (metres; a space vehicle's `d` is its route
 // distance). The drawn "local" position `lp` follows it at a capped speed (followLocal), the lag goes
 // into App.originX / originY so the world stays put; in space App.space carries the route to the sky.
 // Hazards live in the local frame, so they always come at a dodgeable pace.
@@ -32,8 +40,9 @@ function freshSave() {
 
 	return {
 		version: 2, cash: 0, vehicle: 'balloon', unlocked: [ 'balloon' ], levels: defaultLevels(),
-		best: 0, bestBy: { balloon: 0, rocket: 0, starship: 0 }, zones: [ 'shore' ], achievements: {},
-		paints: { rocket: 'classic', starship: 'classic' }, ownedPaints: [ 'rocket:classic', 'starship:classic' ],
+		best: 0, bestBy: { balloon: 0, rocket: 0, starship: 0, warpship: 0, ark: 0 }, zones: [ 'shore' ], achievements: {},
+		paints: { rocket: 'classic', starship: 'classic', warpship: 'classic', ark: 'classic' },
+		ownedPaints: [ 'rocket:classic', 'starship:classic', 'warpship:classic', 'ark:classic' ],
 		timeOfDay: 'afternoon', settings: { music: 0.55, sfx: 0.85 }, muted: false,
 		seen: {}, won: false,
 		stats: { runs: 0, coins: 0, splashes: 0, pops: 0, zaps: 0, blocked: 0, orbs: 0, stars: 0, astronauts: 0, probes: 0, crystals: 0, bags: 0, nightRuns: 0, times: [], maxSpeed: 0, earned: 0, flightTime: 0 },
@@ -52,7 +61,8 @@ function loadSave() {
 			const s = JSON.parse( raw );
 			const levels = defaultLevels();
 			for ( const v in levels ) Object.assign( levels[ v ], ( s.levels || {} )[ v ] || {} );
-			return { ...fresh, ...s, levels, stats: { ...fresh.stats, ...( s.stats || {} ) }, settings: { ...fresh.settings, ...( s.settings || {} ) }, bestBy: { ...fresh.bestBy, ...( s.bestBy || {} ) }, paints: { ...fresh.paints, ...( s.paints || {} ) } };
+			const ownedPaints = [ ...new Set( [ ...fresh.ownedPaints, ...( s.ownedPaints || [] ) ] ) ];
+			return { ...fresh, ...s, levels, ownedPaints, stats: { ...fresh.stats, ...( s.stats || {} ) }, settings: { ...fresh.settings, ...( s.settings || {} ) }, bestBy: { ...fresh.bestBy, ...( s.bestBy || {} ) }, paints: { ...fresh.paints, ...( s.paints || {} ) } };
 
 		}
 
@@ -81,6 +91,20 @@ function loadSave() {
 }
 
 const _v = new Vector3();
+
+const STARS = BODIES.filter( ( b ) => b.star );
+// the Crab pulsar's spin axis and a frame around it
+const PULSAR_AXIS = norm( [ 0.3, 0.2, 0.93 ] );
+const PULSAR_U = norm( cross( PULSAR_AXIS, [ 0, 1, 0 ] ) );
+const PULSAR_V = cross( PULSAR_AXIS, PULSAR_U );
+
+function hashOf( id ) {
+
+	let h = 2166136261;
+	for ( let i = 0; i < id.length; i ++ ) h = Math.imul( h ^ id.charCodeAt( i ), 16777619 );
+	return ( h >>> 0 ) / 4294967296;
+
+}
 
 export class Game {
 
@@ -114,6 +138,8 @@ export class Game {
 			balloon: new Balloon( app.scene ),
 			rocket: new Rocket( app.scene ),
 			starship: new Starship( app.scene ),
+			warpship: new Warpship( app.scene ),
+			ark: new Ark( app.scene ),
 		};
 		this.hazards = new Hazards( app.scene, this.particles );
 		this.hazards.onEvent = ( e ) => {
@@ -138,8 +164,14 @@ export class Game {
 
 			const t = Number( qs.get( 'tier' ) );
 			for ( const v in UPGRADES ) for ( const u of UPGRADES[ v ] ) this.save.levels[ v ][ u.id ] = Math.min( t, u.levels.length - 1 );
-			if ( t < 5 ) this.save.levels.starship.improbability = 0;
-			this.save.unlocked = [ 'balloon', 'rocket', 'starship' ];
+			if ( t < 5 ) {
+
+				this.save.levels.starship.improbability = 0;
+				this.save.levels.ark.anchor = 0;
+
+			}
+
+			this.save.unlocked = VEHICLES.map( ( v ) => v.id );
 
 		}
 
@@ -249,7 +281,7 @@ export class Game {
 		const v = this.vehicle;
 		const st = this.stats( v );
 		const pad = this.padPosition( v );
-		this.s = v === 'balloon' ? createState( st ) : v === 'rocket' ? createRocketState( st ) : createShipState( st );
+		this.s = v === 'balloon' ? createState( st ) : v === 'rocket' ? createRocketState( st ) : createShipState( st, v );
 		this.s.x = pad.x;
 		this.s.y = pad.y;
 		if ( v === 'balloon' ) this.s.heat = 0.35;
@@ -266,7 +298,7 @@ export class Game {
 		const ids = Object.keys( lv );
 		const tier = Math.round( ids.reduce( ( a, k ) => a + lv[ k ], 0 ) / Math.max( 1, ids.length ) * 1.6 );
 		const st = this.stats( v );
-		return { v, best: this.save.bestBy[ v ] || 0, tier, bags: st.bags || 0, shield: st.shield || 0 };
+		return { v, best: this.save.bestBy[ v ] || 0, tier, bags: st.bags || 0, shield: st.shield || 0, jumps: st.jumps || 0 };
 
 	}
 
@@ -490,7 +522,7 @@ export class Game {
 
 		}
 
-		this.music.setMood( v === 'starship' ? 'space' : 'flight' );
+		this.music.setMood( v === 'starship' ? 'space' : isShip( v ) ? 'cosmic' : 'flight' );
 
 	}
 
@@ -499,11 +531,14 @@ export class Game {
 		this.state = 'flight';
 		const v = this.vehicle;
 		this.sound.play( v === 'balloon' ? 'launch' : 'ignition' );
-		const help = { balloon: 'Hold SPACE to fire the burner · A / D to steer', rocket: 'Hold SPACE for thrust · A / D to tilt · boosters light with the engine', starship: 'Hold SPACE to burn: every second multiplies your speed' };
+		const help = {
+			balloon: 'Hold SPACE to fire the burner · A / D to steer', rocket: 'Hold SPACE for thrust · A / D to tilt · boosters light with the engine', starship: 'Hold SPACE to burn: every second multiplies your speed · fly through rings for a kick',
+			warpship: 'Hold SPACE to burn · SHIFT to hyperjump (you pass through anything) · rings refill jumps', ark: 'Hold SPACE to burn · SHIFT to hyperjump · chain the rings!',
+		};
 		if ( ! this.save.seen[ v ] ) this.ui.toast( help[ v ], 5 );
 		this.save.seen[ v ] = true;
 		const qs = this.app.qs;
-		if ( this.sandbox && qs.has( 'start' ) && v !== 'starship' ) {
+		if ( this.sandbox && qs.has( 'start' ) && ! isShip( v ) ) {
 
 			const h = Number( qs.get( 'start' ) );
 			this.s.y = h; this.s.maxY = h; this.s.vy = 40;
@@ -533,9 +568,13 @@ export class Game {
 		this.ui.fade( () => {
 
 			const s = this.s;
+			const v = this.vehicle;
+			const start = SHIP_START[ v ];
 			s.d = ORBIT_START;
 			const qs = this.app.qs;
-			if ( this.sandbox && qs.has( 'start' ) ) s.d = Math.max( ORBIT_START, Number( qs.get( 'start' ) ) );
+			let to = start.d;
+			if ( this.sandbox && qs.has( 'start' ) ) to = Math.max( ORBIT_START, Number( qs.get( 'start' ) ) );
+			if ( v === 'starship' ) s.d = to;
 			s.maxY = s.d;
 			s.u = Math.log( 7800 );
 			s.v = 7800;
@@ -548,11 +587,67 @@ export class Game {
 			this.app.worldVisible = false;
 			this._camSnap = true;
 			this.app.post.cut();
-			this.state = 'flight';
-			this.updateSpace( 0 );
-			this.ui.zoneBanner( { name: 'Low Orbit', from: s.d, color: '#141a3c', tagline: 'Burn for the Moon!' }, false );
+			if ( v === 'starship' ) {
+
+				this.state = 'flight';
+				this.updateSpace( 0 );
+				this.ui.zoneBanner( { name: 'Low Orbit', from: s.d, color: '#141a3c', tagline: 'Burn for the Moon!' }, false );
+
+			} else {
+
+				// the jump out: the route streams by (log distance) inside a warp tunnel
+				this.state = 'jump';
+				this.jump = { t: 0, dur: v === 'ark' ? 5.5 : 3.6, from: s.d, to, v0: start.v };
+				this.sound.play( 'jump' );
+				this.updateSpace( 0 );
+
+			}
 
 		} );
+
+	}
+
+	updateJump( dt ) {
+
+		const j = this.jump, s = this.s;
+		j.t += dt;
+		const k = Math.min( 1, j.t / j.dur );
+		const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow( - 2 * k + 2, 3 ) / 2;
+		const prev = s.d;
+		s.d = Math.exp( Math.log( j.from ) + ( Math.log( j.to ) - Math.log( j.from ) ) * e );
+		s.v = Math.max( 7800, ( s.d - prev ) / Math.max( dt, 1e-3 ) );
+		s.maxY = s.d;
+		s.burning = true;
+		this.lp.y += 170 * dt;
+		this.lp.vy = 170;
+		this.shake = Math.max( this.shake, 0.25 + Math.sin( k * Math.PI ) * 0.3 );
+		this.jumpFx = Math.sin( Math.min( 1, k * 1.15 ) * Math.PI ) * 0.9 + ( k > 0.95 ? 0 : 0.1 );
+		// the Ark dives through the black hole at the end: a flash as it comes out the other side
+		if ( this.vehicle === 'ark' && ! j.flashed && k > 0.9 ) {
+
+			j.flashed = true;
+			this.app.flash = 1;
+			this.sound.play( 'warpin' );
+
+		}
+
+		if ( k >= 1 ) {
+
+			s.d = j.to;
+			s.maxY = s.d;
+			s.u = Math.log( j.v0 );
+			s.v = j.v0;
+			this.jump = null;
+			this.jumpFx = 0;
+			this.state = 'flight';
+			this.run.zone = zoneAt( s.d ).id;
+			this.hazards.reset( undefined, this.lp.y );
+			if ( this.vehicle === 'warpship' ) this.app.flash = 0.6;
+			this.sound.play( 'warpin' );
+			const z = zoneAt( s.d );
+			this.ui.zoneBanner( { ...z, tagline: this.vehicle === 'ark' ? 'Out the far side of the black hole!' : 'Past the heliopause. Burn for Alpha Centauri!' }, false );
+
+		}
 
 	}
 
@@ -608,7 +703,7 @@ export class Game {
 		this.ui.showResults( {
 			reason, vehicle: r.vehicle, altitude: maxH, prevBest, record,
 			lines: [
-				[ r.vehicle === 'starship' ? 'Distance' : 'Altitude', pay ],
+				[ isShip( r.vehicle ) ? 'Distance' : 'Altitude', pay ],
 				[ `Coins ×${ r.coinCount }`, r.coins ],
 				...r.zonesNew.map( ( id ) => [ `New zone: ${ zoneById( id ).name }`, zoneById( id ).bonus ] ),
 				...( recordBonus ? [ [ 'New record bonus', recordBonus ] ] : [] ),
@@ -646,7 +741,7 @@ export class Game {
 	// real altitude / route distance of the player
 	realH() {
 
-		return this.vehicle === 'starship' && this.mode === 'space' ? this.s.d : Math.max( 0, this.s.y );
+		return isShip( this.vehicle ) && this.mode === 'space' ? this.s.d : Math.max( 0, this.s.y );
 
 	}
 
@@ -669,6 +764,8 @@ export class Game {
 				else if ( input.hit( 'Digit1' ) ) this.selectVehicle( 'balloon' );
 				else if ( input.hit( 'Digit2' ) ) this.selectVehicle( 'rocket' );
 				else if ( input.hit( 'Digit3' ) ) this.selectVehicle( 'starship' );
+				else if ( input.hit( 'Digit4' ) ) this.selectVehicle( 'warpship' );
+				else if ( input.hit( 'Digit5' ) ) this.selectVehicle( 'ark' );
 				break;
 			case 'shop':
 				if ( input.hit( 'Escape', 'KeyU' ) ) this.closeShop();
@@ -678,6 +775,9 @@ export class Game {
 				break;
 			case 'ascent':
 				this.updateAscent( dt );
+				break;
+			case 'jump':
+				this.updateJump( dt );
 				break;
 			case 'flight':
 				if ( input.hit( 'Escape', 'KeyP' ) ) this.setPaused( ! this.paused );
@@ -721,7 +821,7 @@ export class Game {
 		if ( this.countdown <= 0 ) {
 
 			this.ui.countdown( 0 );
-			if ( this.vehicle === 'starship' ) this._starshipToOrbit();
+			if ( isShip( this.vehicle ) ) this._starshipToOrbit();
 			else this._beginFlight();
 
 		}
@@ -806,24 +906,46 @@ export class Game {
 
 		} else {
 
-			// starship: route distance + sideways dodging; heat from the Sun
+			// space vehicles: route distance + sideways dodging; heat from nearby stars
 			const sunFlux = this.space ? this.space.sunHeat : 0;
 			if ( this.buffs.boost > 0 ) s.kick = Math.max( s.kick, 0.5 );
-			// flybys in slow motion: within 22 radii of a flyby point the route advances at most
-			// 5 radii per second, so every planet gets a few seconds on screen
+			// flybys in slow motion: near a flyby point the route advances at most `rate` radii per
+			// second, so every world, nebula and galaxy gets a few seconds on screen
 			const fb = flybyAt( s.d / 1000 );
 			const R = fb.body.R;
-			const cap = Math.abs( fb.offset ) < 24 * R ? 3.2 * R * 1000 : Infinity;
+			const [ win, rate ] = fb.body.slow || [ 24, 3.2 ];
+			const cap = Math.abs( fb.offset ) < win * R ? rate * R * 1000 : Infinity;
 			if ( cap < Infinity && ! this.flybyShown ) {
 
 				this.flybyShown = fb.body.id;
-				if ( s.v > cap * 1.5 ) this.ui.toast( `${ fb.body.name } flyby!`, 2, 'record' );
+				if ( s.v > cap * 1.5 && fb.body.id !== 'edge' ) this.ui.toast( `${ fb.body.name } flyby!`, 2, 'record' );
 
 			} else if ( cap === Infinity ) this.flybyShown = null;
 
 			this.flyby = cap < Infinity && s.v > cap;
+			// hyperjump: SHIFT / E spends a charge
+			if ( bag && s.jumps > 0 && s.jumpT <= 0 && ! s.popped ) this.hyperjump();
 			stepShip( s, st, inp, dt, sunFlux, cap );
-			const vis = MathUtils.clamp( 60 + 14 * Math.log10( Math.max( 1, s.v / 7800 ) ), 60, 170 );
+			// the end of the road: the route's end, and Sagittarius A* for the Warpship
+			s.d = Math.min( s.d, ROUTE_LENGTH * 1000, r.endReason === 'horizon' ? BODY_BY_ID.blackhole.at * 1000 : Infinity );
+			s.maxY = Math.min( s.maxY, ROUTE_LENGTH * 1000 );
+			// the Ark without its Reality Anchor is held back at the Edge
+			const gate = zoneById( 'edge' ).from;
+			if ( v === 'ark' && ! st.anchor && s.d > gate ) {
+
+				s.d = gate;
+				s.u = Math.min( s.u, Math.log( 1e25 ) );
+				if ( ! r.gated ) {
+
+					r.gated = true;
+					this.ui.toast( 'The wall of light pushes back! You need the Reality Anchor.', 3.5, 'bad' );
+					this.shake = 1;
+
+				}
+
+			}
+			this.jumpFx = s.jumpT > 0 ? Math.sin( ( 1 - s.jumpT / JUMP_TIME ) * Math.PI ) : 0;
+			const vis = MathUtils.clamp( 60 + 14 * Math.log10( Math.max( 1, s.v / 7800 ) ), 60, 170 ) * ( 1 + this.jumpFx * 1.6 );
 			this.lp.vy = vis;
 			this.lp.vx = s.vx;
 			this.lp.y += vis * dt;
@@ -841,10 +963,23 @@ export class Game {
 
 			}
 
+			if ( v === 'warpship' && s.d >= BODY_BY_ID.blackhole.at * 1000 && r.endTimer < 0 ) {
+
+				// the Warpship can't escape Sagittarius A*: the end of its road
+				s.d = BODY_BY_ID.blackhole.at * 1000;
+				r.endReason = 'horizon';
+				r.endTimer = 2.5;
+				this.app.flash = 0.8;
+
+			}
+
 			if ( s.d >= ROUTE_LENGTH * 1000 * 0.999 && r.endTimer < 0 ) {
 
+				s.d = ROUTE_LENGTH * 1000;
 				r.endReason = 'victory';
-				r.endTimer = 2.5;
+				r.endTimer = 3;
+				this.app.flash = 2.5;
+				this.sound.play( 'warpin' );
 
 			}
 
@@ -852,7 +987,7 @@ export class Game {
 
 		const h = this.realH();
 		r.maxH = Math.max( r.maxH, h );
-		const speed = v === 'starship' ? s.v : Math.hypot( s.vx, s.vy );
+		const speed = isShip( v ) ? s.v : Math.hypot( s.vx, s.vy );
 		// breaking the sound barrier in the thick air: a vapour cone and a boom
 		if ( v === 'rocket' && ! r.boom && speed > 343 && s.y < 18000 ) {
 
@@ -878,8 +1013,9 @@ export class Game {
 		const local = v !== 'balloon';
 		const ctx = {
 			h, local, night: this.app.timeOfDay === 'night' || this.app.timeOfDay === 'dawn',
-			hRate: Math.max( 1, ( v === 'starship' ? s.v : Math.abs( s.vy ) ) / Math.max( 1, Math.abs( this.lp.vy ) ) ),
+			hRate: Math.max( 1, ( isShip( v ) ? s.v : Math.abs( s.vy ) ) / Math.max( 1, Math.abs( this.lp.vy ) ) ),
 			localSpeed: Math.abs( this.lp.vy ),
+			ship: isShip( v ), vehicle: v,
 		};
 		if ( this.warp < 1.5 ) this.hazards.spawnAhead( this.lp, view, ctx );
 		this.hazards.update( dt, this.lp, view, this.time, ctx );
@@ -887,7 +1023,7 @@ export class Game {
 		const c = Math.cos( s.angle || 0 ), sn = Math.sin( s.angle || 0 );
 		const circles = m.colliders.map( ( q ) => ( { x: this.lp.x + q.x * c + q.y * sn, y: this.lp.y - q.x * sn + q.y * c, r: q.r } ) );
 		this.invuln = Math.max( 0, this.invuln - dt );
-		if ( this.invuln <= 0 && ! s.popped && this.warp < 1.5 ) {
+		if ( this.invuln <= 0 && ! s.popped && this.warp < 1.5 && ! ( s.jumpT > 0 ) ) {
 
 			const hit = this.hazards.hitTest( circles );
 			if ( hit ) this.onHit( hit );
@@ -944,14 +1080,17 @@ export class Game {
 		// ---- end conditions
 		if ( r.endTimer < 0 ) {
 
-			if ( v === 'starship' ) {
+			if ( isShip( v ) ) {
 
+				// (a coasting ship still faster than a flyby's slow motion carries on through it; the
+				// Ark with its anchor coasts on to the wall at the Edge)
+				const final = v === 'ark' && st.anchor && s.d > zoneById( 'edge' ).from;
 				if ( s.popped ) {
 
 					r.endReason = 'destroyed';
 					r.endTimer = 1.8;
 
-				} else if ( s.fuel <= 0 && ! s.burning ) {
+				} else if ( s.fuel <= 0 && ! s.burning && ! this.flyby && ! final && ! ( s.jumpT > 0 ) ) {
 
 					this.coastTime = ( this.coastTime || 0 ) + dt;
 					if ( this.coastTime > 2.5 ) {
@@ -1041,6 +1180,30 @@ export class Game {
 
 	}
 
+	// SHIFT in a Warpship or the Ark: a burst of speed inside a warp tunnel, hazards pass through
+	hyperjump() {
+
+		const s = this.s, r = this.run, m = this.model;
+		s.jumps --;
+		s.jumpT = JUMP_TIME;
+		r.jumps = ( r.jumps || 0 ) + 1;
+		this.save.stats.jumps = ( this.save.stats.jumps || 0 ) + 1;
+		this.shake = Math.max( this.shake, 0.9 );
+		this.app.flash = Math.max( this.app.flash || 0, 0.35 );
+		this.sound.play( 'jump' );
+		this.ui.toast( 'HYPERJUMP!', 1.1, 'record' );
+		const cy = this.lp.y + m.height * 0.5;
+		for ( let i = 0; i < 40; i ++ ) {
+
+			const a = i / 40 * Math.PI * 2;
+			this.particles.emit( { x: this.lp.x + Math.cos( a ) * 3, y: cy, z: Math.sin( a ) * 3, vx: Math.cos( a ) * 40, vy: - 20, vz: Math.sin( a ) * 40, life: 0.6, size: 0.8, grow: 2, color: [ 3, 4, 12 ], drag: 2, kind: 2 } );
+
+		}
+
+		if ( r.jumps >= 3 ) this.checkAchievements( r );
+
+	}
+
 	damage( n, kind ) {
 
 		const s = this.s;
@@ -1075,7 +1238,7 @@ export class Game {
 	onHit( { hazard, x, y } ) {
 
 		const s = this.s, m = this.model;
-		hazard.spent = hazard.type !== 'storm' && hazard.type !== 'flare';
+		hazard.spent = ! LASTING.includes( hazard.type );
 		this.invuln = 1.1;
 		this.shake = 1;
 		const cx = this.lp.x, cy = this.lp.y + m.height * 0.5;
@@ -1098,8 +1261,9 @@ export class Game {
 		}
 
 		if ( hazard.type === 'storm' ) this.save.stats.zaps ++;
-		this.sound.play( hazard.type === 'storm' ? 'zap' : 'hit' );
-		if ( s.hull > hazard.damage ) this.ui.toast( hazard.type === 'storm' ? 'Zapped!' : hazard.type === 'flare' ? 'Scorched!' : 'Ouch!', 1.2, 'bad' );
+		const zap = [ 'storm', 'beam', 'jetburst', 'cstring' ].includes( hazard.type );
+		this.sound.play( zap ? 'zap' : 'hit' );
+		if ( s.hull > hazard.damage ) this.ui.toast( HIT_TEXT[ hazard.type ] || 'Ouch!', 1.2, 'bad' );
 		this.damage( hazard.damage, hazard.type );
 
 	}
@@ -1137,7 +1301,7 @@ export class Game {
 
 			}
 			case 'fuel':
-				s.fuel = Math.min( st.fuel, s.fuel + ( this.vehicle === 'starship' ? 5 : 6 ) );
+				s.fuel = Math.min( st.fuel, s.fuel + ( isShip( this.vehicle ) ? 5 : 6 ) );
 				r.fuelCans ++;
 				this.sound.play( 'fuel' );
 				this.ui.toast( '+Fuel', 0.9, 'good' );
@@ -1183,10 +1347,37 @@ export class Game {
 				this.sound.play( 'star' );
 				burst( [ [ 1, 5, 7 ] ], 20 );
 				break;
+			case 'ring': {
+
+				// warp rings: a kick of speed each; the whole chain earns a bonus and a hyperjump charge
+				const chain = p.chain;
+				chain.got ++;
+				r.rings = ( r.rings || 0 ) + 1;
+				S.rings = ( S.rings || 0 ) + 1;
+				s.kick = ( s.kick || 0 ) + RING_KICK * ( st.ring || 1 );
+				r.coins += p.value;
+				this.sound.play( 'ring', chain.got );
+				this.shake = Math.max( this.shake, 0.3 );
+				this.particles.burst( 24, { x: p.x, y: p.y, speed: 16, life: 0.5, size: 0.5, colors: [ [ 2, 6, 12 ], [ 8, 4, 12 ] ], drag: 2, kind: 2 } );
+				if ( chain.got === chain.n ) {
+
+					const bonus = p.value * chain.n;
+					r.coins += bonus;
+					r.chains = ( r.chains || 0 ) + 1;
+					if ( st.jumps > 0 && s.jumps < st.jumps ) s.jumps ++;
+					this.ui.toast( `PERFECT CHAIN! +${ fmtMoney( bonus ) }${ st.jumps > 0 ? ' · +1 jump' : '' }`, 1.8, 'record' );
+					this.sound.play( 'chain' );
+					this.checkAchievements( r );
+
+				}
+
+				break;
+
+			}
 
 		}
 
-		this.ui.popText( p );
+		if ( p.kind !== 'ring' ) this.ui.popText( p );
 
 	}
 
@@ -1265,12 +1456,14 @@ export class Game {
 		}
 
 		// speed streaks: space dust / air rushing past, relative to the local frame
-		const real = v === 'starship' ? s.v : Math.hypot( s.vx || 0, s.vy || 0 );
-		if ( this.state === 'flight' && ( real > 400 || v === 'starship' ) ) {
+		const ship = isShip( v );
+		const real = ship ? s.v : Math.hypot( s.vx || 0, s.vy || 0 );
+		if ( ( this.state === 'flight' || this.state === 'jump' ) && ( real > 400 || ship ) ) {
 
-			const n = v === 'starship' ? 2 + Math.min( 6, Math.log10( Math.max( 1, real / 7800 ) ) ) : Math.min( 4, real / 400 );
+			const jf = this.jumpFx || 0;
+			const n = ( ship ? 2 + Math.min( 6, Math.log10( Math.max( 1, real / 7800 ) ) * 0.5 ) : Math.min( 4, real / 400 ) ) + jf * 10;
 			const h = this.view.halfH, w = this.view.halfW;
-			const col = v === 'starship' ? [ 1.4, 1.6, 2.2 ] : [ 1.2, 1.3, 1.5 ];
+			const col = jf > 0.2 ? [ 2, 2.5, 6 ] : ship ? [ 1.4, 1.6, 2.2 ] : [ 1.2, 1.3, 1.5 ];
 			for ( let i = 0; i < n; i ++ ) {
 
 				if ( Math.random() > 0.7 ) continue;
@@ -1290,54 +1483,184 @@ export class Game {
 		const km = s.d / 1000;
 		const r = routeAt( km );
 		const pos = r.pos;
-		const bodies = [];
 		const alt = km;
+		const t = this.time;
 		const nearEarth = r.leg === 0 && alt < 60000;
 		const spaceMix = r.leg === 0 ? MathUtils.smoothstep( alt, 40000, 60000 ) : 1;
-		const sunVec = sub( SUN.pos, pos );
-		const sunDist = len( sunVec );
-		const sunDirW = toWorld( norm( sunVec ), r );
-		for ( const b of BODIES ) {
+		const W = ( v ) => toWorld( v, r );
+		const V3 = ( a ) => ( { x: a[ 0 ], y: a[ 1 ], z: a[ 2 ] } );
 
-			if ( b.id === 'sun' ) continue;
-			if ( b.id === 'earth' && spaceMix <= 0 ) continue;
-			const d = sub( b.pos, pos );
-			const dist = len( d );
-			const dir = toWorld( norm( d ), r );
-			const angle = Math.asin( Math.min( 1, b.R / Math.max( dist, b.R * 1.0001 ) ) );
-			// (artistic: the light leans toward the camera side so the planets show their day side)
-			const lr = toWorld( norm( sub( SUN.pos, b.pos ) ), r );
-			const lightW = norm( [ lr[ 0 ] * 0.6 + 0.35, lr[ 1 ] * 0.6 + 0.45, lr[ 2 ] * 0.6 + 0.75 ] );
-			const flux = AU / Math.max( len( sub( SUN.pos, b.pos ) ), 1 );
-			bodies.push( {
-				type: b.type, dir: { x: dir[ 0 ], y: dir[ 1 ], z: dir[ 2 ] }, angle, spin: this.time * 0.02 + b.R * 1e-4,
-				tilt: b.tilt || 0, light: { x: lightW[ 0 ], y: lightW[ 1 ], z: lightW[ 2 ] }, distance: dist,
-				brightness: b.id === 'earth' ? spaceMix : b.type === 8 ? 1 : MathUtils.clamp( flux, 0.25, 2.5 ),
-			} );
+		// inside the Milky Way's disc its stars are all around; outside it, the galaxy itself
+		const mw = BODY_BY_ID.milkyway;
+		const rel = sub( pos, GC );
+		const hgt = dot( rel, mw.normal );
+		const rad = len( sub( rel, mul( mw.normal, hgt ) ) );
+		const starField = ( 1 - MathUtils.smoothstep( Math.abs( hgt ), 2500 * LY, 14000 * LY ) ) * ( 1 - MathUtils.smoothstep( rad, 60000 * LY, 95000 * LY ) );
+		const inGalaxy = starField > 0.3;
+
+		// the brightest star is the key light (drawn as the sun disc); nearby stars heat the hull
+		let key = null, keyFlux = 0, heat = 0;
+		for ( const b of STARS ) {
+
+			const dist = Math.max( len( sub( b.pos, pos ) ), b.R * 1.0001 );
+			b._flux = b.lum * ( AU / dist ) ** 2;
+			if ( b.heat ) heat += b.heat * ( 4 * b.R / dist ) ** 2;
+			if ( b._flux > keyFlux ) {
+
+				keyFlux = b._flux;
+				key = b;
+
+			}
 
 		}
 
+		if ( ! inGalaxy ) key = null;
+
+		const cand = [];
+		let quasarK = 0;
+		for ( const b of BODIES ) {
+
+			if ( b === key || b.type === BT.edge ) continue;
+			if ( b.type === BT.earth && spaceMix <= 0 ) continue;
+			const d = sub( b.pos, pos );
+			const dist = len( d );
+			const q = dist / b.R;
+			const angle = Math.asin( Math.min( 1, b.R / Math.max( dist, b.R * 1.0001 ) ) );
+			let prio = angle, k = 1, extra = [ 1, 1, 1, 0 ], light = null, style = b.style || 0;
+			let spin = t * 0.02 + b.R * 1e-4;
+			switch ( b.type ) {
+
+				case BT.star: {
+
+					if ( ! inGalaxy ) continue;
+					const I = Math.min( 80, 6 * Math.pow( b._flux / 1e-11, 0.25 ) );
+					if ( I < 1.2 && angle < 0.0004 ) continue;
+					extra = [ ...b.color, I ];
+					k = b.surf ?? 1;
+					prio = Math.max( angle * 2, I * 0.002 );
+					break;
+
+				}
+
+				case BT.nebula:
+					k = 1 - MathUtils.smoothstep( q, 25, 60 );
+					if ( k <= 0 ) continue;
+					extra = [ ...b.color, q ];
+					spin = hashOf( b.id ) * 20;
+					break;
+				case BT.pulsar: {
+
+					k = 1 - MathUtils.smoothstep( q, 15, 40 );
+					if ( k <= 0 ) continue;
+					// a lighthouse: the beam axis sweeps round a tilted spin axis
+					const ph = t * Math.PI * 2 / 1.3;
+					const a = [ 0.5 * PULSAR_AXIS[ 0 ] + 0.866 * ( PULSAR_U[ 0 ] * Math.cos( ph ) + PULSAR_V[ 0 ] * Math.sin( ph ) ), 0.5 * PULSAR_AXIS[ 1 ] + 0.866 * ( PULSAR_U[ 1 ] * Math.cos( ph ) + PULSAR_V[ 1 ] * Math.sin( ph ) ), 0.5 * PULSAR_AXIS[ 2 ] + 0.866 * ( PULSAR_U[ 2 ] * Math.cos( ph ) + PULSAR_V[ 2 ] * Math.sin( ph ) ) ];
+					light = V3( W( a ) );
+					extra = [ ...b.color, q ];
+					prio = 1;
+					break;
+
+				}
+
+				case BT.galaxy:
+					if ( b.outside ) k = 1 - starField;
+					if ( k <= 0.01 || angle < 0.002 ) continue;
+					light = V3( W( b.normal || [ 0, 0, 1 ] ) );
+					extra = [ ...b.color, q ];
+					spin = hashOf( b.id ) * 6.28;
+					break;
+				case BT.cluster:
+					k = 1 - MathUtils.smoothstep( q, 2.2, 4 );
+					if ( k <= 0 ) continue;
+					extra = [ ...b.color, q ];
+					spin = hashOf( b.id ) * 40;
+					prio = angle * k;
+					break;
+				case BT.quasar:
+					k = 1 - MathUtils.smoothstep( q, 6, 20 );
+					if ( k <= 0 ) continue;
+					if ( style === 0 ) quasarK = Math.max( quasarK, 1 - MathUtils.smoothstep( q, 2.5, 8 ) );
+					light = V3( W( b.normal ) );
+					extra = [ ...b.color, q ];
+					prio = Math.max( angle, 0.05 ) * k;
+					break;
+				default: {
+
+					// planets and moons, lit by their star (the Sun unless they say otherwise)
+					if ( angle < 0.0015 && b.type !== BT.blackhole ) continue;
+					const star = BODY_BY_ID[ b.sun || 'sun' ];
+					const toStar = sub( star.pos, b.pos );
+					// (artistic: the light leans toward the camera side so the planets show their day side)
+					const lr = W( norm( toStar ) );
+					light = V3( norm( [ lr[ 0 ] * 0.6 + 0.35, lr[ 1 ] * 0.6 + 0.45, lr[ 2 ] * 0.6 + 0.75 ] ) );
+					k = b.type === BT.earth ? spaceMix : b.type === BT.blackhole ? 1 : MathUtils.clamp( Math.sqrt( star.lum ) * AU / Math.max( len( toStar ), 1 ), 0.25, 2.5 );
+					if ( b.type === BT.planet ) extra = [ ...star.color, 0 ];
+					if ( b.type === BT.saturn ) style = b.tilt;
+					if ( b.type === BT.blackhole ) prio = angle * 4;
+					if ( ! inGalaxy && b.type !== BT.blackhole ) continue;
+
+				}
+
+			}
+
+			cand.push( { prio, body: { type: b.type, dir: V3( W( norm( d ) ) ), angle, spin, tilt: style, light: light || { x: 0, y: 1, z: 0 }, distance: dist, brightness: k, extra } } );
+
+		}
+
+		cand.sort( ( a, b ) => b.prio - a.prio );
 		// far to near: the shader composites them in order
-		bodies.sort( ( a, b ) => b.distance - a.distance );
-		const flux = ( AU / Math.max( sunDist, 1 ) ) ** 2;
-		const sunR = Math.asin( Math.min( 0.9, SUN.R / Math.max( sunDist, SUN.R * 1.01 ) ) );
-		// heat: 1 at the Sun flyby distance (4 solar radii)
-		const sunHeat = ( 4 * SUN.R / Math.max( sunDist, SUN.R ) ) ** 2;
-		const zone = zoneAt( s.d );
-		const deep = [ 'interstellar', 'blackhole' ].includes( zone.id ) || r.leg >= 7;
-		this.space = { sunHeat };
+		const bodies = cand.slice( 0, MAX_BODIES ).map( ( c ) => c.body ).sort( ( a, b ) => b.distance - a.distance );
+
+		let sunDir, sunR = 0.0005, sunTint = [ 1, 1, 1 ], sunGlow = 0, flux = 0.35, sunDisk = 1;
+		if ( key ) {
+
+			const d = sub( key.pos, pos );
+			const dist = len( d );
+			sunDir = W( norm( d ) );
+			sunR = Math.asin( Math.min( 0.9, key.R / Math.max( dist, key.R * 1.01 ) ) );
+			sunTint = key.color;
+			sunDisk = key.surf ?? 1;
+			sunGlow = MathUtils.clamp( keyFlux * 0.01, 0, 0.6 ) * Math.min( 1, Math.sqrt( sunDisk ) * 2 );
+			flux = MathUtils.clamp( Math.sqrt( keyFlux ), 0.3, 3 );
+
+		} else {
+
+			// between the galaxies: light from the biggest one in view (no disc)
+			const g = bodies.filter( ( b ) => b.type === BT.galaxy || b.type === BT.quasar || b.type === BT.cluster ).sort( ( a, b ) => b.angle - a.angle )[ 0 ];
+			sunDir = g ? [ g.dir.x, g.dir.y, g.dir.z ] : [ 0.3, 0.5, - 0.8 ];
+			sunDisk = 0;
+			sunTint = [ 0.85, 0.88, 1 ];
+			flux = 0.35 + quasarK * 0.5;
+
+		}
+
+		const lg = Math.log10( Math.max( km, 1 ) );
+		const cmb = MathUtils.smoothstep( km, 1.8e23, 4.45e23 );
+		const web = MathUtils.smoothstep( lg, 21.2, 21.6 ) * ( 1 - cmb * 0.6 );
+		const core = r.leg === BODY_BY_ID.blackhole.leg || zoneAt( s.d ).id === 'blackhole';
+		// the hull heats near stars, in a quasar's glare and against the wall of light at the Edge
+		this.space = { sunHeat: heat + quasarK * 1.2 + cmb * 0.9 };
+		const cell = 3e8 * LY;
+		const sd = sunDir;
 		this.app.space = {
+			key: key ? { dir: V3( sunDir ), angle: sunR, type: 10 } : null,
 			altitude: Math.min( alt * 1000, 6e7 ),
 			spaceMix: nearEarth ? spaceMix : 1,
 			bodies,
-			sunDir: new Vector3( sunDirW[ 0 ], sunDirW[ 1 ], sunDirW[ 2 ] ),
-			// key light for the ship and the obstacles: the Sun, pulled toward the camera for readability
-			keyDir: new Vector3( sunDirW[ 0 ] * 0.4 + 0.3, sunDirW[ 1 ] * 0.4 + 0.55, sunDirW[ 2 ] * 0.4 + 0.75 ).normalize(),
+			sunDir: new Vector3( sd[ 0 ], sd[ 1 ], sd[ 2 ] ),
+			// key light for the ship and the obstacles, pulled toward the camera for readability
+			keyDir: new Vector3( sd[ 0 ] * 0.4 + 0.3, sd[ 1 ] * 0.4 + 0.55, sd[ 2 ] * 0.4 + 0.75 ).normalize(),
 			sunRadius: Math.max( sunR, 0.0005 ),
-			sunGlow: MathUtils.clamp( flux * 0.01, 0, 0.6 ),
-			flux: deep ? 0.35 : MathUtils.clamp( Math.sqrt( flux ), 0.2, 3 ),
+			sunGlow, sunTint, sunDisk,
+			flux,
 			earthShine: nearEarth ? 1 - spaceMix : 0,
-			nebula: deep ? [ 0.9, 0.3, 0.8, 1 ] : [ 0.5, 0.2, 0.7, MathUtils.smoothstep( km, 4e9, 2e10 ) * 0.6 ],
+			nebula: core ? [ 0.9, 0.3, 0.8, starField ] : [ 0.5, 0.2, 0.7, MathUtils.smoothstep( km, 4e9, 2e10 ) * 0.5 * starField ],
+			starField,
+			deepField: 1 - starField,
+			web, cmb,
+			webOffset: [ pos[ 0 ] / cell, pos[ 1 ] / cell, pos[ 2 ] / cell ],
+			frame: r,
+			tunnel: this.jumpFx || 0,
 		};
 		void dt;
 
@@ -1378,11 +1701,13 @@ export class Game {
 			const near = MathUtils.smoothstep( this.s.d, 1.5e6, 3e7 );
 			let pitch = - 0.22 + near * 0.82;
 			// (the black hole looks ~4x its horizon with the disk)
-			const size = ( b ) => b.angle * ( b.type === 8 ? 4 : 1 );
-			const big = this.app.space && this.app.space.bodies.reduce( ( a, b ) => ( b.type !== 7 && size( b ) > ( a ? size( a ) : 0.01 ) ? b : a ), null );
+			// (the black hole looks ~4x its horizon with the disk; things all around don't count)
+			const size = ( b ) => b.type === 14 && b.angle < 1.35 ? b.angle * 0.7 : b.angle > 0.75 || b.type === 7 || b.type === 13 ? 0 : b.angle * ( b.type === 8 ? 4 : b.type === 10 ? 2 : 1 );
+			const sp = this.app.space;
+			const big = sp && [ ...sp.bodies, ...( sp.key ? [ sp.key ] : [] ) ].reduce( ( a, b ) => ( size( b ) > ( a ? size( a ) : 0.01 ) ? b : a ), null );
 			if ( big ) {
 
-				const want = MathUtils.clamp( Math.atan2( big.dir.y, - big.dir.z ) - 0.1, - 0.3, 1.1 );
+				const want = MathUtils.clamp( Math.atan2( big.dir.y, - big.dir.z ) - 0.1, - 0.55, 0.85 );
 				const w = MathUtils.smoothstep( size( big ), 0.01, 0.08 );
 				pitch += ( want - pitch ) * w;
 
@@ -1392,7 +1717,7 @@ export class Game {
 			pitch = this.spacePitch;
 			tgt.set( lp.x, lp.y + m.height * 0.5 + this.camDist * Math.sin( pitch ) * 0.8, 0 );
 			pos = new Vector3( lp.x, lp.y - this.camDist * Math.sin( pitch ) * 0.5, this.camDist * Math.cos( pitch ) );
-			fov = 55;
+			fov = 55 + ( this.jumpFx || 0 ) * 22;
 
 		} else {
 
@@ -1508,7 +1833,7 @@ export function paintCost( v, id ) {
 
 	if ( id === 'classic' ) return 0;
 	const list = Object.keys( v === 'rocket' ? ROCKET_LIVERIES : SHIP_LIVERIES );
-	return ( v === 'rocket' ? 15000 : 250000 ) * list.indexOf( id );
+	return ( { rocket: 15000, starship: 250000, warpship: 8e6, ark: 600e6 }[ v ] || 0 ) * list.indexOf( id );
 
 }
 

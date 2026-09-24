@@ -1,6 +1,6 @@
-// The ladder from the beach to the centre of the galaxy. `from` is the distance travelled from the
-// Earth's surface (m): straight up for the balloon and the rocket, along the Starship's route (see
-// Route.js) past the Moon, Mars, the Sun and the outer planets. Space zones start at each flyby.
+// The ladder from the beach to the edge of the observable universe. `from` is the distance travelled
+// from the Earth's surface (m): straight up for the balloon and the rocket, along the space route (see
+// Route.js) past the planets, other stars, the heart of the galaxy and the galaxies beyond.
 
 import { ROUTE_ZONES } from './Route.js';
 
@@ -46,7 +46,9 @@ export function formatAltitude( y ) {
 	if ( y < 1e9 ) return Math.round( y / 1000 ).toLocaleString( 'en-US' ) + ' km';
 	if ( y < 0.2 * AU ) return ( y / 1e9 ).toFixed( 1 ) + 'M km';
 	if ( y < 0.1 * LY ) return ( y / AU ).toFixed( y < 10 * AU ? 2 : 1 ) + ' AU';
-	return ( y / LY ).toLocaleString( 'en-US', { maximumFractionDigits: y < 100 * LY ? 2 : 0 } ) + ' ly';
+	if ( y < 1e7 * LY ) return ( y / LY ).toLocaleString( 'en-US', { maximumFractionDigits: y < 100 * LY ? 2 : 0 } ) + ' ly';
+	if ( y < 1e9 * LY ) return ( y / LY / 1e6 ).toFixed( y < 1e8 * LY ? 1 : 0 ) + 'M ly';
+	return ( y / LY / 1e9 ).toFixed( 2 ) + 'B ly';
 
 }
 
@@ -62,16 +64,20 @@ export function formatSpeed( v ) {
 
 export function formatMoney( v ) {
 
+	if ( v >= 1e12 ) return '$' + ( v / 1e12 ).toFixed( 2 ) + 'T';
 	if ( v >= 1e9 ) return '$' + ( v / 1e9 ).toFixed( 2 ) + 'B';
 	if ( v >= 1e7 ) return '$' + ( v / 1e6 ).toFixed( 1 ) + 'M';
 	return '$' + Math.round( v ).toLocaleString( 'en-US' );
 
 }
 
-// cash for reaching h (m): linear low down, logarithmic once the numbers get astronomical
+// cash for reaching h (m): linear low down, logarithmic once the numbers get astronomical, and
+// growing again (x2.2 per factor of ten) beyond the solar system
+const PAY_13 = 8000 + 90000 * Math.log10( 1e13 / 20000 );
 export function altitudePay( h ) {
 
 	if ( h <= 20000 ) return h * 0.4;
-	return 8000 + 90000 * Math.log10( h / 20000 );
+	if ( h <= 1e13 ) return 8000 + 90000 * Math.log10( h / 20000 );
+	return PAY_13 * Math.pow( 2.2, Math.log10( h / 1e13 ) );
 
 }

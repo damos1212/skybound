@@ -11,8 +11,11 @@ import { SUN_ANGULAR_RADIUS } from './Atmosphere.js';
 //   - stars: at night, and in daylight once the sky above goes dark with altitude
 //   - the Earth seen from above: ray-sphere hit of the ground, procedural oceans, continents,
 //     cloud cover and city lights, lit through the atmosphere's transmittance, plus its in-scatter
-//   - space backdrops: up to 8 bodies (Moon, Mars, Jupiter, Saturn and its rings, Neptune, a Kuiper
-//     world, the Earth as a far marble, a black hole with lensing and an accretion disk) and a nebula
+//   - space backdrops: up to 12 bodies (Moon, Mars, Jupiter, Saturn and its rings, Neptune, a Kuiper
+//     world, the Earth as a far marble, a black hole with lensing and an accretion disk, other stars,
+//     exoplanets, glowing nebulae, a pulsar's beams, galaxies, star and galaxy clusters, quasar jets)
+//   - deep space: a faint field of distant galaxies, the cosmic web, the microwave background at the
+//     edge of the observable universe, and the warp tunnel of a hyperjump
 //   - the volumetric clouds composited in (faded out by `cloudMix` above the cloud heights)
 //
 // WGSL module (`sky.module`, prefix `sky`): skyRadiance, skyRadianceWithClouds, skyReflectionRadiance,
@@ -23,9 +26,9 @@ const STAR_CELLS = 160;
 const STAR_SIGMA = 0.1;
 const MW = new Vector3( 0.3, 0.2, 1 ).normalize();
 const STAR_REFLECTION = 0.08;
-export const MAX_BODIES = 8;
+export const MAX_BODIES = 12;
 
-export const BODY = { moon: 1, mars: 2, jupiter: 3, saturn: 4, neptune: 5, earth: 7, blackhole: 8, kuiper: 9 };
+export const BODY = { moon: 1, mars: 2, jupiter: 3, saturn: 4, neptune: 5, earth: 7, blackhole: 8, kuiper: 9, star: 10, planet: 11, nebula: 12, pulsar: 13, galaxy: 14, cluster: 15, quasar: 16, edge: 18 };
 
 const f = ( x ) => {
 
@@ -59,16 +62,36 @@ export class Sky {
 			nebula: [ 'vec4f', new Vector4( 0.5, 0.2, 0.7, 0 ) ],
 			// planet surface: time (s) for drifting clouds, city lights strength
 			planetTime: [ 'f32', 0 ],
+			// colour of the key star (disc and glow)
+			sunTint: [ 'vec3f', new Vector3( 1, 1, 1 ) ],
+			// 0..1: the Milky Way's stars (0 outside galaxies)
+			starField: [ 'f32', 1 ],
+			// the route frame (universe axes of the view's x, y, z) for the deep-space backdrops
+			frameX: [ 'vec3f', new Vector3( 1, 0, 0 ) ],
+			// 0..1: faint distant galaxies everywhere
+			deepField: [ 'f32', 0 ],
+			frameY: [ 'vec3f', new Vector3( 0, 1, 0 ) ],
+			// 0..1: the cosmic web's filaments
+			web: [ 'f32', 0 ],
+			frameZ: [ 'vec3f', new Vector3( 0, 0, 1 ) ],
+			// 0..1: the microwave background (the edge of the observable universe)
+			cmb: [ 'f32', 0 ],
+			// where the ship is in the cosmic web (cells)
+			webOffset: [ 'vec3f', new Vector3() ],
+			// 0..1: hyperjump warp tunnel
+			tunnel: [ 'f32', 0 ],
 			// aurora curtains (0..1): night skies and the edge of space
 			aurora: [ 'f32', 0 ],
 			bodyCount: [ 'u32', 0 ],
 			pad0: [ 'f32', 0 ],
 			// per body: xyz direction from the camera (unit), w angular radius (rad)
-			bodyDir: [ 'vec4f[8]', v4s() ],
-			// x type, y spin (rad), z ring tilt / spare, w brightness
-			bodyInfo: [ 'vec4f[8]', v4s() ],
-			// xyz direction toward the sun at the body, w distance (km, for the black hole lensing)
-			bodyLight: [ 'vec4f[8]', v4s() ],
+			bodyDir: [ 'vec4f[12]', v4s() ],
+			// x type, y spin (rad) / seed, z ring tilt / style, w brightness
+			bodyInfo: [ 'vec4f[12]', v4s() ],
+			// xyz direction toward the sun at the body (a galaxy's disc normal, a jet or beam axis), w distance (km)
+			bodyLight: [ 'vec4f[12]', v4s() ],
+			// rgb colour (a star's, or the light's for planets), w: distance in radii (or a star's point brightness)
+			bodyExtra: [ 'vec4f[12]', v4s() ],
 		}, { label: 'sky' } );
 		const U = this.params.fields;
 		this.sunDiskIntensity = U.sunDiskIntensity;
@@ -82,12 +105,14 @@ export class Sky {
 		this.nebula = U.nebula;
 		this.planetTime = U.planetTime;
 		this.aurora = U.aurora;
+		this.sunTint = U.sunTint;
 		this._module = null;
 		this._background = null;
 
 	}
 
-	// bodies: [ { type, dir: Vector3 (unit, from the camera), angle (rad), spin, tilt, light: Vector3, brightness } ]
+	// bodies: [ { type, dir: Vector3 (unit, from the camera), angle (rad), spin, tilt (or style), light: Vector3,
+	// brightness, distance, extra: [ r, g, b, w ] } ]
 	setBodies( bodies ) {
 
 		const U = this.params.fields;
@@ -100,6 +125,8 @@ export class Sky {
 			U.bodyInfo.value[ i ].set( b.type, b.spin || 0, b.tilt || 0, b.brightness ?? 1 );
 			const l = b.light || { x: 0, y: 1, z: 0 };
 			U.bodyLight.value[ i ].set( l.x, l.y, l.z, b.distance || 0 );
+			const e = b.extra || [ 1, 1, 1, 0 ];
+			U.bodyExtra.value[ i ].set( e[ 0 ], e[ 1 ], e[ 2 ], e[ 3 ] );
 
 		}
 
@@ -126,6 +153,7 @@ export class Sky {
 			deps,
 			uniforms: this.params,
 			uniformName: 'skyParams',
+			bindings: clouds ? { skyNoiseTex: { texture: clouds.noise } } : {},
 			code: /* wgsl */`
 fn skyHash13( p: vec3f ) -> f32 {
 	var p3 = fract( p * vec3f( 0.1031, 0.1030, 0.0973 ) );
@@ -147,6 +175,46 @@ fn skyFbm( p: vec3f, oct: i32 ) -> f32 {
 	var s = 0.0; var a = 0.5; var q = p; var n = 0.0;
 	for ( var i = 0; i < oct; i++ ) { s += skyVnoise( q ) * a; n += a; a *= 0.5; q = q * 2.03 + vec3f( 17.1, 3.7, 9.2 ); }
 	return s / n;
+}
+
+
+// 3D noise (4 channels, tiling every unit): the clouds' Perlin-Worley texture when there is one
+fn skyNoise3( p: vec3f ) -> vec4f {
+	${ clouds ? 'return textureSampleLevel( skyNoiseTex, smpLinearRepeat, p, 0.0 );' : 'return vec4f( skyVnoise( p * 5.0 ), skyVnoise( p * 9.0 + 3.1 ), skyVnoise( p * 17.0 + 7.3 ), skyVnoise( p * 31.0 + 1.7 ) );' }
+}
+
+// a view direction in the universe's axes (the route frame), for backdrops fixed to the cosmos
+fn skyUniverse( dir: vec3f ) -> vec3f {
+	return skyParams.frameX * dir.x + skyParams.frameY * dir.y + skyParams.frameZ * dir.z;
+}
+
+// a point of light around direction c: a small core, a halo and four diffraction spikes (I: peak)
+fn skyPoint( dir: vec3f, c: vec3f, I: f32, tint: vec3f ) -> vec3f {
+	let cosT = dot( dir, c );
+	if ( I <= 0.0 || cosT < 0.995 ) { return vec3f( 0.0 ); }
+	let off = dir - c * cosT;
+	let a2 = dot( off, off );
+	var ax = vec3f( 1.0, 0.0, 0.0 ) - c * c.x;
+	if ( dot( ax, ax ) < 1e-4 ) { ax = vec3f( 0.0, 1.0, 0.0 ) - c * c.y; }
+	ax = normalize( ax );
+	let ay = cross( c, ax );
+	let u = abs( dot( off, ax ) );
+	let v = abs( dot( off, ay ) );
+	let core = exp( -a2 / ( 0.0017 * 0.0017 ) );
+	let halo = 0.03 / ( 1.0 + a2 / ( 0.005 * 0.005 ) );
+	let spikes = ( exp( -u / 0.0007 - v / 0.03 ) + exp( -v / 0.0007 - u / 0.03 ) ) * 0.2 * sat( log2( max( I, 1.0 ) ) * 0.15 );
+	return tint * I * ( core + halo + spikes );
+}
+
+// closest approach of the view ray (from the eye along dir) to the segment p + a s, s in [ -1, 1 ]:
+// vec2( distance, s )
+fn skySegment( dir: vec3f, p: vec3f, a: vec3f ) -> vec2f {
+	let b = dot( a, dir );
+	let d = dot( dir, p );
+	let e = dot( a, p );
+	let s = clamp( ( b * d - e ) / max( 1.0 - b * b, 1e-5 ), -1.0, 1.0 );
+	let t = max( dot( dir, p + a * s ), 0.0 );
+	return vec2f( length( p + a * s - dir * t ), s );
 }
 
 // the viewer's position in the planet frame (km)
@@ -230,7 +298,7 @@ fn skySunDisk( dir: vec3f ) -> vec3f {
 	// corona / glare around the disc
 	let g = skyParams.sunGlow;
 	c += ( vec3f( 1.0, 0.85, 0.6 ) * exp( -( ang - R ) / max( R * 1.5, 1e-4 ) ) * g.x + vec3f( 1.0, 0.7, 0.4 ) * exp( -ang * 3.0 ) * g.y ) * hidden * step( R, ang );
-	return c;
+	return c * skyParams.sunTint;
 }
 
 fn skyStars( dir0: vec3f ) -> vec3f {
@@ -262,7 +330,7 @@ fn skyStars( dir0: vec3f ) -> vec3f {
 	let glow = vec3f( 0.55, 0.6, 0.75 ) * ( band * dark * 0.0035 );
 	// extinction toward the horizon inside the atmosphere; none in space
 	let horizon = mix( smoothstep( 0.0, 0.2, dir.y ), 1.0, skyParams.starsDay );
-	return ( star + glow ) * skyParams.starIntensity * horizon;
+	return ( star + glow ) * skyParams.starIntensity * horizon * skyParams.starField;
 }
 
 // aurora: rippling green curtains with violet tops low over the northern horizon (fantasy: the
@@ -290,6 +358,88 @@ fn skyNebula( dir: vec3f ) -> vec3f {
 	let n2 = skyFbm( dir * 4.0 + vec3f( 1.3, 7.1, 2.2 ), 4 );
 	let c = mix( skyParams.nebula.rgb, vec3f( 0.15, 0.35, 0.8 ), n2 );
 	return c * pow( smoothstep( 0.45, 0.85, n1 ), 2.0 ) * k * 0.004;
+}
+
+
+// faint distant galaxies all over the sky (fixed to the universe)
+fn skyDeepField( dir: vec3f ) -> vec3f {
+	let k = skyParams.deepField;
+	if ( k <= 0.0 ) { return vec3f( 0.0 ); }
+	let u = skyUniverse( dir );
+	return ( skyGalaxySprite( u, 90.0, 0.2, 71.0 ) * 0.25 + skyGalaxySprite( u, 220.0, 0.25, 13.0 ) * 0.12 ) * k;
+}
+
+fn skyWorley( p: vec3f ) -> vec2f {
+	let i = floor( p );
+	let f = fract( p );
+	var d1 = 8.0;
+	var d2 = 8.0;
+	for ( var z = -1; z <= 1; z++ ) {
+		for ( var y = -1; y <= 1; y++ ) {
+			for ( var x = -1; x <= 1; x++ ) {
+				let g = vec3f( f32( x ), f32( y ), f32( z ) );
+				let o = vec3f( skyHash13( i + g ), skyHash13( i + g + 19.1 ), skyHash13( i + g + 47.7 ) );
+				let d = length( g + o - f );
+				if ( d < d1 ) { d2 = d1; d1 = d; } else if ( d < d2 ) { d2 = d; }
+			}
+		}
+	}
+	return vec2f( d1, d2 );
+}
+
+// the cosmic web: filaments of galaxies along the edges of vast cells, knots where they meet; two
+// shells drift at different rates as the ship moves (parallax)
+fn skyWeb( dir: vec3f ) -> vec3f {
+	let k = skyParams.web;
+	if ( k <= 0.0 ) { return vec3f( 0.0 ); }
+	let u = skyUniverse( dir );
+	var col = vec3f( 0.0 );
+	for ( var i = 0; i < 2; i++ ) {
+		let far = f32( i );
+		var p = u * mix( 2.5, 5.0, far ) + skyParams.webOffset * mix( 1.0, 0.45, far );
+		// warped cells: wavy filaments rather than straight edges
+		p += ( skyNoise3( p * 0.21 + vec3f( far * 0.37 ) ).rgb - 0.5 ) * 0.9;
+		let w = skyWorley( p );
+		let fil = exp( -( w.y - w.x ) * mix( 16.0, 22.0, far ) );
+		// clumpy: galaxies strung along the filaments, knots of clusters where they meet
+		let clump = pow( skyNoise3( p * 0.7 + vec3f( 3.1 ) ).r, 2.0 ) * 2.5;
+		let node = exp( -w.x * w.x * 30.0 ) * fil;
+		let grain = step( 0.8, skyHash13( floor( u * 700.0 ) ) ) * fil * 2.0;
+		col += ( vec3f( 0.42, 0.3, 1.0 ) * fil * clump * 0.18 + vec3f( 0.9, 0.8, 1.0 ) * grain * 0.3 + vec3f( 1.0, 0.75, 0.9 ) * node * 0.7 ) * mix( 1.0, 0.45, far );
+	}
+	return col * k;
+}
+
+// the cosmic microwave background, in the map's famous palette: a wall of light ahead
+fn skyCMB( dir: vec3f ) -> vec3f {
+	let k = skyParams.cmb;
+	if ( k <= 0.0 ) { return vec3f( 0.0 ); }
+	let u = skyUniverse( dir );
+	let n = skyFbm( u * 4.0, 5 ) * 0.7 + skyFbm( u * 16.0 + vec3f( 3.0 ), 3 ) * 0.3;
+	let x = sat( ( n - 0.33 ) / 0.34 );
+	var c = mix( vec3f( 0.02, 0.05, 0.5 ), vec3f( 0.1, 0.55, 1.0 ), smoothstep( 0.0, 0.3, x ) );
+	c = mix( c, vec3f( 0.9, 0.9, 0.75 ), smoothstep( 0.35, 0.5, x ) * 0.8 );
+	c = mix( c, vec3f( 1.0, 0.72, 0.18 ), smoothstep( 0.5, 0.7, x ) );
+	c = mix( c, vec3f( 0.9, 0.18, 0.05 ), smoothstep( 0.7, 1.0, x ) );
+	let ahead = smoothstep( -0.7, 1.0, dir.y );
+	return c * k * ( 0.1 + ahead * ahead * 1.4 ) * ( 0.4 + k * 2.0 );
+}
+
+// hyperjump: star streaks racing out of the point ahead, a glow at the end of the tunnel
+fn skyTunnel( dir: vec3f ) -> vec3f {
+	let k = skyParams.tunnel;
+	if ( k <= 0.0 ) { return vec3f( 0.0 ); }
+	let a = acos( clamp( dir.y, -1.0, 1.0 ) );
+	let az = ( atan2( dir.z, dir.x ) / 6.2832 + 0.5 ) * 180.0;
+	let lane = floor( az );
+	let h = skyHash13( vec3f( lane, 3.0, 7.0 ) );
+	let da = fract( az ) - 0.5;
+	let across = exp( -da * da * 30.0 ) * step( h, 0.7 );
+	let s = fract( log( max( a, 0.02 ) ) * 1.3 - frame.time * ( 1.2 + h * 2.5 ) + h * 17.0 );
+	let streak = smoothstep( 0.55, 0.97, s ) * ( 1.0 - smoothstep( 0.97, 1.0, s ) ) * smoothstep( 0.03, 0.4, a );
+	let col = mix( vec3f( 0.35, 0.55, 1.0 ), vec3f( 1.0, 0.9, 1.0 ), h );
+	let glow = exp( -a * 3.5 ) * 1.5 + exp( -pow( ( a - 1.3 ) / 0.45, 2.0 ) ) * 0.12;
+	return ( col * streak * across * 2.5 + vec3f( 0.6, 0.5, 1.0 ) * glow ) * k;
 }
 
 fn skyMoon( dir: vec3f ) -> vec3f {
@@ -376,6 +526,283 @@ fn skyBodyAlbedo( kind: i32, n: vec3f, spin: f32 ) -> vec3f {
 	return vec3f( 0.5 );
 }
 
+
+// exoplanets: rgb albedo, a glowing lava
+fn skyExoAlbedo( style: i32, n: vec3f, spin: f32, L: vec3f ) -> vec4f {
+	let q = skySpin( n, spin );
+	if ( style == 0 ) {
+		// an ocean world: deep blue seas, a few green islands, swirling cloud
+		let land = smoothstep( 0.6, 0.64, skyFbm( q * 2.5 + vec3f( 4.0 ), 5 ) );
+		let cl = smoothstep( 0.5, 0.78, skyFbm( q * vec3f( 3.0, 6.0, 3.0 ) + vec3f( skyParams.planetTime * 0.004, 0.0, 0.0 ), 5 ) );
+		var c = mix( vec3f( 0.015, 0.07, 0.2 ), vec3f( 0.2, 0.28, 0.1 ), land );
+		return vec4f( mix( c, vec3f( 0.85 ), cl * 0.9 ), 0.0 );
+	}
+	if ( style == 1 ) {
+		// a lava world: black crust, glowing cracks and lakes
+		let crust = skyFbm( q * 4.0, 5 );
+		let cracks = smoothstep( 0.035, 0.0, abs( skyFbm( q * 6.0 + vec3f( 2.0 ), 4 ) - 0.5 ) );
+		return vec4f( vec3f( 0.07, 0.055, 0.05 ) * ( 0.6 + crust ), cracks + smoothstep( 0.64, 0.72, crust ) * 0.6 );
+	}
+	if ( style == 2 ) {
+		// an ice world: white plains, blue fractures
+		let cr = smoothstep( 0.03, 0.0, abs( skyFbm( q * 5.0 + vec3f( 9.0 ), 4 ) - 0.5 ) );
+		return vec4f( mix( vec3f( 0.8, 0.87, 0.95 ), vec3f( 0.2, 0.42, 0.7 ), cr * 0.85 ) * ( 0.85 + skyFbm( q * 12.0, 3 ) * 0.3 ), 0.0 );
+	}
+	if ( style == 3 ) {
+		// a desert world: dune seas
+		let dunes = sin( q.y * 40.0 + skyFbm( q * 6.0, 4 ) * 14.0 ) * 0.5 + 0.5;
+		return vec4f( mix( vec3f( 0.55, 0.33, 0.17 ), vec3f( 0.78, 0.56, 0.32 ), dunes * 0.6 ) * ( 0.8 + skyFbm( q * 3.0, 4 ) * 0.4 ), 0.0 );
+	}
+	if ( style == 4 ) {
+		// an eyeball world, tidally locked: an ocean under its sun, ice everywhere else
+		let day = dot( n, L ) + ( skyFbm( q * 5.0, 4 ) - 0.5 ) * 0.3;
+		let ocean = smoothstep( 0.45, 0.6, day );
+		let shore = smoothstep( 0.2, 0.42, day ) * ( 1.0 - ocean );
+		let ice = vec3f( 0.82, 0.86, 0.9 ) * ( 0.8 + skyFbm( q * 10.0, 3 ) * 0.3 );
+		return vec4f( mix( mix( ice, vec3f( 0.42, 0.3, 0.2 ), shore ), vec3f( 0.02, 0.1, 0.22 ), ocean ), 0.0 );
+	}
+	// a little violet gas giant
+	let lat = q.y + ( skyFbm( q * vec3f( 2.0, 10.0, 2.0 ), 4 ) - 0.5 ) * 0.08;
+	return vec4f( mix( vec3f( 0.42, 0.28, 0.58 ), vec3f( 0.78, 0.62, 0.82 ), sin( lat * 18.0 ) * 0.5 + 0.5 ), 0.0 );
+}
+
+// another star: a disc with limb darkening and granulation (or a supergiant's huge convection cells)
+// and a corona once it is close, a point of light (brightness I) from afar
+fn skyStarBody( dir: vec3f, c: vec3f, R: f32, tint: vec3f, k: f32, style: i32, I: f32 ) -> vec3f {
+	let cosT = dot( dir, c );
+	var col = skyPoint( dir, c, I, tint );
+	if ( R < 0.0004 ) { return col; }
+	let ang = acos( clamp( cosT, -1.0, 1.0 ) );
+	if ( ang > R * 12.0 + 0.2 ) { return col; }
+	let lum = 2500.0 * min( 1.0, pow( ${ f( SUN_ANGULAR_RADIUS ) } / R, 1.6 ) + 0.004 ) * k;
+	let h = skyBodyHit( dir, c, R );
+	if ( h.hit ) {
+		let r = ang / R;
+		let mu = sqrt( max( 1.0 - r * r, 0.0 ) );
+		var surf: vec3f;
+		if ( style == 1 ) {
+			let q = skySpin( h.n, skyParams.planetTime * 0.004 );
+			let cells = skyFbm( q * 2.6 + vec3f( skyParams.planetTime * 0.01 ), 4 );
+			let fine = skyFbm( q * 13.0 - vec3f( skyParams.planetTime * 0.03 ), 3 );
+			let hot = smoothstep( 0.35, 0.75, cells ) * 0.85 + fine * 0.3;
+			surf = mix( tint * vec3f( 0.4, 0.2, 0.16 ), tint * vec3f( 1.25, 1.1, 1.0 ), hot ) * ( 1.0 - 0.75 * ( 1.0 - mu ) );
+		} else {
+			let gran = 1.0 + ( skyFbm( h.n * 60.0 + vec3f( skyParams.planetTime * 0.05 ), 3 ) - 0.5 ) * 0.5;
+			surf = tint * gran * ( 1.0 - 0.6 * ( 1.0 - mu ) );
+		}
+		col += surf * lum * smoothstep( R, R * 0.985, ang );
+	} else {
+		let g = exp( -( ang - R ) / max( R * 0.9, 1e-4 ) );
+		col += tint * ( g * 0.25 + g * g * 1.5 ) * sqrt( lum ) * 0.15;
+	}
+	return col;
+}
+
+// a glowing gas cloud of unit radius seen from -c * q (from inside when q < 1): rgb emission, a
+// transmittance of its dust
+fn skyNebulaBody( dir: vec3f, c: vec3f, q: f32, tint: vec3f, style: i32, seed: f32 ) -> vec4f {
+	let o = -c * q;
+	let b = dot( o, dir );
+	let disc = b * b - ( dot( o, o ) - 1.0 );
+	if ( disc <= 0.0 ) { return vec4f( 0.0, 0.0, 0.0, 1.0 ); }
+	let sq = sqrt( disc );
+	let t0 = max( -b - sq, 0.0 );
+	let t1 = -b + sq;
+	if ( t1 <= 0.0 ) { return vec4f( 0.0, 0.0, 0.0, 1.0 ); }
+	let n = 10;
+	let dt = ( t1 - t0 ) / f32( n );
+	let jit = skyHash13( dir * 911.0 + vec3f( fract( frame.time * 7.1 ) ) );
+	var em = vec3f( 0.0 );
+	var T = 1.0;
+	let sd = vec3f( seed * 0.37, seed * 0.11, seed * 0.23 );
+	for ( var i = 0; i < n; i++ ) {
+		let p = o + dir * ( t0 + ( f32( i ) + jit ) * dt );
+		let r = length( p );
+		let nz = skyNoise3( p * 0.9 + sd );
+		let nd = skyNoise3( p * 2.7 + sd.yzx );
+		var col: vec3f;
+		var dust = 0.0;
+		if ( style == 1 ) {
+			// a supernova remnant: a cage of thin orange filaments in a wobbly shell around a blue
+			// synchrotron glow
+			let rr = r + ( nz.r - 0.5 ) * 0.3;
+			let shell = exp( -pow( ( rr - 0.78 ) / 0.14, 2.0 ) );
+			let fil = pow( 1.0 - abs( nd.r * 2.0 - 1.0 ), 18.0 ) * shell * ( 0.5 + nz.g );
+			col = mix( vec3f( 1.0, 0.22, 0.05 ), vec3f( 1.0, 0.6, 0.28 ), nz.b ) * fil * 7.0 + vec3f( 0.3, 0.5, 1.0 ) * exp( -r * r * 3.5 ) * ( 0.15 + nz.g * 0.6 ) * 0.7;
+		} else {
+			// an emission nebula: billows of pink hydrogen, teal oxygen in the hot heart, bright
+			// ridges where the starlight hits, dark dust lanes
+			let shape = sat( 1.0 - r * r );
+			let base = nz.r * 0.6 + nd.r * 0.4;
+			let billow = smoothstep( 0.52, 0.85, base );
+			let ridge = pow( 1.0 - abs( nd.g * 2.0 - 1.0 ), 10.0 );
+			let dens = ( billow * 1.2 + ridge * billow * 4.0 + ridge * 0.3 ) * shape;
+			let core = exp( -r * r * 10.0 );
+			col = mix( tint, vec3f( 0.15, 0.9, 0.8 ), core * 0.85 ) * dens + vec3f( 1.0, 0.9, 0.8 ) * core * 0.25;
+			dust = smoothstep( 0.45, 0.65, nz.g * 0.5 + nd.b * 0.5 ) * shape * 12.0;
+		}
+		em += col * dt * T;
+		T *= exp( -dust * dt );
+	}
+	return vec4f( em * 0.9, T );
+}
+
+// a pulsar: a blinding point and two beams sweeping round (a: beam axis, q: distance in beam lengths)
+fn skyPulsar( dir: vec3f, c: vec3f, q: f32, a: vec3f, tint: vec3f, k: f32 ) -> vec3f {
+	let seg = skySegment( dir, c * q, a );
+	let w = 0.01 + abs( seg.y ) * 0.08;
+	let beam = exp( -( seg.x * seg.x ) / ( w * w ) ) * pow( 1.0 - abs( seg.y ), 1.5 );
+	// the lighthouse flash when a beam sweeps across the viewer
+	let flash = pow( abs( dot( a, c ) ), 80.0 );
+	return ( tint * ( beam * 2.5 + flash * 0.4 ) + skyPoint( dir, c, 70.0, tint ) ) * k;
+}
+
+// a galaxy of unit radius seen from -c * q: a bulge, a disc with spiral arms (or a bar, or the clumps
+// of an irregular), dust lanes and star-forming knots; ellipticals are all bulge. rgb emission, a
+// transmittance of the dust
+fn skyGalaxy( dir: vec3f, c: vec3f, q: f32, N: vec3f, tint: vec3f, style: i32, seed: f32 ) -> vec4f {
+	let o = -c * q;
+	if ( q > 1.6 && dot( dir, c ) < cos( asin( 1.6 / q ) ) ) { return vec4f( 0.0, 0.0, 0.0, 1.0 ); }
+	let tc = max( -dot( o, dir ), 0.0 );
+	let dc = length( o + dir * tc );
+	if ( style == 3 ) {
+		let g = exp( -pow( dc / 0.45, 0.6 ) * 4.5 );
+		return vec4f( tint * g * 2.5, 1.0 );
+	}
+	var em = vec3f( 1.0, 0.82, 0.6 ) * exp( -pow( dc / 0.08, 0.75 ) * 3.0 ) * select( 3.5, 1.0, style == 2 );
+	var T = 1.0;
+	let dn = dot( dir, N );
+	if ( abs( dn ) > 1e-4 ) {
+		let t = -dot( o, N ) / dn;
+		let p = o + dir * t;
+		var U = cross( N, vec3f( 0.0, 1.0, 0.0 ) );
+		if ( dot( U, U ) < 1e-4 ) { U = cross( N, vec3f( 1.0, 0.0, 0.0 ) ); }
+		U = normalize( U );
+		let V = cross( N, U );
+		let x = dot( p, U );
+		let y = dot( p, V );
+		let r = length( vec2f( x, y ) );
+		if ( t > 0.0 && r < 1.4 ) {
+			let th = atan2( y, x ) + seed;
+			let lr = log( max( r, 0.01 ) );
+			let nz = skyNoise3( vec3f( x, y, seed * 0.13 ) * 1.7 );
+			var arm: f32;
+			if ( style == 2 ) {
+				arm = smoothstep( 0.3, 0.75, skyNoise3( vec3f( x * 0.8, y * 0.8, seed * 0.29 ) ).r );
+			} else {
+				arm = pow( 0.5 + 0.5 * cos( th * 2.0 - lr * 3.4 ), 2.5 );
+				if ( style == 1 ) {
+					let bx = x * cos( seed ) + y * sin( seed );
+					let by = -x * sin( seed ) + y * cos( seed );
+					arm = max( arm * smoothstep( 0.12, 0.3, r ), exp( -bx * bx / 0.06 - by * by / 0.004 ) );
+				}
+			}
+			let disk = exp( -r * 3.0 ) * smoothstep( 1.4, 0.8, r );
+			let light = disk * ( 0.25 + 1.4 * arm * ( 0.35 + nz.r ) );
+			var col = mix( vec3f( 1.0, 0.8, 0.6 ), vec3f( 0.55, 0.7, 1.0 ), sat( arm * 1.4 ) * smoothstep( 0.05, 0.35, r ) ) * light;
+			col += vec3f( 1.0, 0.3, 0.55 ) * smoothstep( 0.7, 0.82, nz.g ) * arm * disk * 3.0;
+			// resolved stars up close
+			let cell = floor( vec2f( x, y ) * 500.0 );
+			col += vec3f( 1.0, 0.95, 0.9 ) * step( 0.992, skyHash13( vec3f( cell, seed ) ) ) * disk * 4.0 * sat( 1.5 / q - 0.3 );
+			// seen edge on the disc piles up; dust lanes trail the arms
+			let proj = min( 1.0 / max( abs( dn ), 0.12 ), 3.5 );
+			let lane = select( pow( 0.5 + 0.5 * cos( th * 2.0 - lr * 3.4 - 0.7 ), 6.0 ), smoothstep( 0.6, 0.8, nz.b ), style == 2 );
+			let dust = lane * smoothstep( 0.04, 0.25, r ) * disk * 6.0 * ( 0.4 + nz.b );
+			T = exp( -dust * proj * 0.3 );
+			if ( t < tc ) { em *= T; }
+			em += col * proj * 0.8;
+		}
+	}
+	return vec4f( em * tint, T );
+}
+
+// a cluster of unit radius seen from -c * q: an unresolved glow (and hot gas) with resolved members
+// on a grid of directions: stars for a globular (style 1), galaxies otherwise; the Great Attractor
+// (style 2) adds streams of galaxies pouring into its heart
+fn skyGalaxySprite( dir: vec3f, cells: f32, fill: f32, seed: f32 ) -> vec3f {
+	let a = abs( dir );
+	let onX = a.x > a.y && a.x > a.z;
+	let onY = a.y > a.z;
+	let face = select( select( sign( dir.z ) + 8.0, sign( dir.y ) + 5.0, onY ), sign( dir.x ) + 2.0, onX );
+	let g = select( select( dir.xy / a.z, dir.xz / a.y, onY ), dir.yz / a.x, onX ) * cells;
+	let cell = vec3f( floor( g ), face + seed );
+	if ( skyHash13( cell ) > fill ) { return vec3f( 0.0 ); }
+	let fr = fract( g ) - 0.5 - ( vec2f( skyHash13( cell + 3.1 ), skyHash13( cell + 5.3 ) ) - 0.5 ) * 0.5;
+	let an = skyHash13( cell + 7.0 ) * 6.283;
+	let rot = vec2f( fr.x * cos( an ) + fr.y * sin( an ), -fr.x * sin( an ) + fr.y * cos( an ) );
+	let el = 1.0 + skyHash13( cell + 9.0 ) * 2.5;
+	let sz = 0.06 + skyHash13( cell + 13.0 ) * 0.12;
+	let d2 = ( rot.x * rot.x + rot.y * rot.y * el * el ) / ( sz * sz );
+	let hc = skyHash13( cell + 17.0 );
+	return select( vec3f( 1.0, 0.85, 0.65 ), vec3f( 0.65, 0.75, 1.0 ), hc < 0.25 ) * exp( -d2 * 2.0 ) * ( 0.6 + hc * 1.5 );
+}
+
+fn skyCluster( dir: vec3f, c: vec3f, q: f32, tint: vec3f, style: i32, seed: f32 ) -> vec3f {
+	let o = -c * q;
+	let b = dot( o, dir );
+	let disc = b * b - ( dot( o, o ) - 1.0 );
+	if ( disc <= 0.0 ) { return vec3f( 0.0 ); }
+	let sq = sqrt( disc );
+	let chord = max( -b + sq, 0.0 ) - max( -b - sq, 0.0 );
+	if ( chord <= 0.0 ) { return vec3f( 0.0 ); }
+	let dc = length( o - dir * b );
+	let rc = select( 0.2, 0.07, style == 1 );
+	let prof = chord / ( 1.0 + dc * dc / ( rc * rc ) );
+	var col = tint * prof * select( select( 0.12, 0.06, style == 2 ), 0.6, style == 1 );
+	if ( style == 1 ) {
+		// a globular cluster: countless old stars
+		let a = abs( dir );
+		let onX = a.x > a.y && a.x > a.z;
+		let onY = a.y > a.z;
+		let face = select( select( sign( dir.z ) + 8.0, sign( dir.y ) + 5.0, onY ), sign( dir.x ) + 2.0, onX );
+		let g = select( select( dir.xy / a.z, dir.xz / a.y, onY ), dir.yz / a.x, onX ) * 300.0;
+		let cell = vec3f( floor( g ), face + seed );
+		if ( skyHash13( cell ) < min( prof * 0.8, 0.85 ) ) {
+			let fr = fract( g ) - 0.5 - ( vec2f( skyHash13( cell + 3.1 ), skyHash13( cell + 5.3 ) ) - 0.5 ) * 0.6;
+			let hc = skyHash13( cell + 11.0 );
+			let sc = select( select( vec3f( 1.0, 0.9, 0.72 ), vec3f( 1.0, 0.5, 0.25 ), hc > 0.86 ), vec3f( 0.6, 0.75, 1.0 ), hc < 0.07 );
+			col += sc * exp( -dot( fr, fr ) * 70.0 ) * ( 1.2 + hc * 4.0 );
+		}
+		return col;
+	}
+	col += vec3f( 0.45, 0.35, 1.0 ) * prof * 0.08;
+	col += skyGalaxySprite( dir, 70.0, min( prof * 0.5, 0.8 ), seed ) * 1.5;
+	col += skyGalaxySprite( dir, 170.0, min( prof * 0.4, 0.7 ), seed + 31.0 ) * 0.8;
+	if ( style == 2 ) {
+		let pc = o - dir * b;
+		let rho = length( pc );
+		let streams = pow( skyNoise3( normalize( pc + vec3f( 1e-5 ) ) * 0.6 + vec3f( rho * 0.12 ) ).g, 3.0 );
+		col += vec3f( 0.75, 0.6, 1.0 ) * streams * exp( -rho * 2.0 ) * 1.2 + vec3f( 1.0, 0.85, 0.95 ) * exp( -rho * rho * 40.0 ) * 0.8;
+	}
+	return col;
+}
+
+// a quasar (style 0) or M87 (style 1): relativistic jets along N with bright knots, radio lobes, the
+// host galaxy and a blinding core (q: distance in jet lengths)
+fn skyQuasar( dir: vec3f, c: vec3f, q: f32, N: vec3f, tint: vec3f, style: i32, k: f32 ) -> vec3f {
+	let p = c * q;
+	let seg = skySegment( dir, p, N );
+	let s = seg.y;
+	let one = select( 1.0, step( 0.0, s ), style == 1 );
+	let w = 0.006 + abs( s ) * 0.035;
+	let knots = 0.55 + 0.45 * sin( abs( s ) * 38.0 - skyParams.planetTime * 1.5 );
+	var col = mix( vec3f( 0.9, 0.95, 1.0 ), vec3f( 0.55, 0.4, 1.0 ), abs( s ) ) * exp( -( seg.x * seg.x ) / ( w * w ) ) * ( 1.0 - abs( s ) * 0.7 ) * knots * 4.0 * one;
+	if ( style == 0 ) {
+		for ( var i = 0; i < 2; i++ ) {
+			let L = p + N * select( -1.0, 1.0, i == 1 );
+			let tl = max( dot( dir, L ), 0.0 );
+			let dl = length( L - dir * tl );
+			col += vec3f( 0.6, 0.35, 1.0 ) * exp( -( dl * dl ) / 0.05 ) * 0.5;
+		}
+	}
+	let tc = max( dot( dir, p ), 0.0 );
+	let dc = length( p - dir * tc );
+	col += vec3f( 1.0, 0.85, 0.65 ) * exp( -pow( dc / select( 0.07, 0.3, style == 1 ), 0.7 ) * 3.0 ) * select( 1.2, 2.5, style == 1 );
+	col += vec3f( 1.0, 0.6, 0.3 ) * exp( -( dc * dc ) / 0.0004 ) * 3.0;
+	col += skyPoint( dir, c, select( 90.0, 25.0, style == 1 ), vec3f( 0.85, 0.9, 1.0 ) );
+	return col * tint * k;
+}
+
 // composite the bodies over the sky radiance base along dir
 fn skyBodies( dir: vec3f, base: vec3f ) -> vec3f {
 	var col = base;
@@ -390,6 +817,23 @@ fn skyBodies( dir: vec3f, base: vec3f ) -> vec3f {
 		let c = bd.xyz;
 		let R = bd.w;
 		let L = light.xyz;
+		let ex = skyParams.bodyExtra[ i ];
+		let style = i32( info.z + 0.5 );
+		if ( kind == 10 ) { col += skyStarBody( dir, c, R, ex.rgb, info.w, style, ex.w ); continue; }
+		if ( kind == 12 ) {
+			let n = skyNebulaBody( dir, c, ex.w, ex.rgb, style, info.y );
+			col = col * n.a + n.rgb * info.w;
+			continue;
+		}
+		if ( kind == 13 ) { col += skyPulsar( dir, c, ex.w, L, ex.rgb, info.w ); continue; }
+		if ( kind == 14 ) {
+			let g = skyGalaxy( dir, c, ex.w, L, ex.rgb, style, info.y );
+			col = col * g.a + g.rgb * info.w;
+			continue;
+		}
+		if ( kind == 15 ) { col += skyCluster( dir, c, ex.w, ex.rgb, style, info.y ) * info.w; continue; }
+		if ( kind == 16 ) { col += skyQuasar( dir, c, ex.w, L, ex.rgb, style, info.w ); continue; }
+		if ( kind >= 17 ) { continue; }
 		if ( kind == 8 ) {
 			// black hole: shadow, photon ring, accretion disk
 			let h = skyBodyHit( dir, c, R * 2.6 );
@@ -440,6 +884,12 @@ fn skyBodies( dir: vec3f, base: vec3f ) -> vec3f {
 			if ( kind == 7 ) {
 				let alb = skyEarthAlbedo( h.n, skyParams.planetTime );
 				surf = skySurfaceLight( h.n, L, dir, alb, 1.0 ) * info.w;
+			} else if ( kind == 11 ) {
+				let a = skyExoAlbedo( style, h.n, info.y, L );
+				let NdL = dot( h.n, L );
+				surf = a.rgb * ex.rgb * E * max( NdL, 0.0 ) * INV_PI * info.w + a.rgb * 0.0004 + vec3f( 1.0, 0.35, 0.08 ) * a.a * 0.8;
+				let rimE = pow( 1.0 - sat( dot( h.n, -dir ) ), 3.0 ) * sat( NdL + 0.3 );
+				if ( style == 0 || style == 4 ) { surf += vec3f( 0.3, 0.5, 1.0 ) * rimE * E * 0.05 * info.w * ex.rgb; }
 			} else {
 				let alb = skyBodyAlbedo( kind, h.n, info.y );
 				let NdL = dot( h.n, L );
@@ -491,6 +941,7 @@ fn skyBackground( dir: vec3f, starK: f32 ) -> vec3f {
 		let occ = select( 1.0, 0.0, skyGroundHit( dir ) > 0.0 && atm > 0.5 );
 		L += ( skyMoonSky( dir ) * atm + skyStars( dir ) * starK + skyNebula( dir ) ) * occ;
 	}
+	if ( skyParams.spaceMix > 0.5 ) { L += skyDeepField( dir ) + skyWeb( dir ) + skyCMB( dir ); }
 	L += skyAurora( dir ) * atm;
 	return L;
 }
@@ -518,7 +969,7 @@ fn skyReflectionRadiance( dir: vec3f ) -> vec3f {
 fn skyViewRadiance( dir0: vec3f ) -> vec3f {
 	let dir = skyLens( dir0 );
 	var base = skyBackground( dir, 1.0 ) + skyMoon( dir ) + skySunDisk( dir );
-	base = skyBodies( dir0, base );
+	base = skyBodies( dir0, base ) + skyTunnel( dir0 );
 	let dirC = dir0;
 	${ clouds ? `let c = cloudsSampleView( dirC );\n\treturn mix( base, base * c.a + c.rgb, skyParams.cloudMix );` : 'return base;' }
 }

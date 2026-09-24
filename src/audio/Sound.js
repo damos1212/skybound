@@ -153,8 +153,12 @@ export class Sound {
 		this.thunder.g.gain.setTargetAtTime( v === 'rocket' ? ( b * 0.9 + boosters * 0.6 ) * inAir : 0, t, 0.05 );
 		this.thunder.f.frequency.setTargetAtTime( 180 + b * 140 + Math.random() * 40, t, 0.05 );
 		this.rumble.g.gain.setTargetAtTime( ( v === 'balloon' ? b * 0.12 : v === 'rocket' ? ( b + boosters ) * 0.14 * inAir : 0 ), t, 0.04 );
-		const hum = v === 'starship' && ( flying || game.state === 'countdown' ) ? 0.04 + b * 0.1 : 0;
-		const pitch = v === 'starship' && s && s.v ? 90 + Math.min( 220, Math.log10( Math.max( 1, s.v / 7800 ) ) * 22 ) : 110;
+		// the space drives hum; the Warpship's and the Ark's sit lower and swell during a jump
+		const ship = v === 'starship' || v === 'warpship' || v === 'ark';
+		const jumping = game.state === 'jump' || ( s && s.jumpT > 0 );
+		const hum = ship && ( flying || game.state === 'countdown' || game.state === 'jump' ) ? 0.04 + b * 0.1 + ( jumping ? 0.08 : 0 ) : 0;
+		const base = v === 'ark' ? 55 : v === 'warpship' ? 70 : 90;
+		const pitch = ship && s && s.v ? base + Math.min( 220, Math.log10( Math.max( 1, s.v / 7800 ) ) * ( v === 'starship' ? 22 : 9 ) ) * ( jumping ? 1.5 : 1 ) : 110;
 		this.hum.g.gain.setTargetAtTime( hum, t, 0.1 );
 		this.hum2.g.gain.setTargetAtTime( hum * 0.6, t, 0.1 );
 		this.hum.o.frequency.setTargetAtTime( pitch, t, 0.2 );
@@ -317,6 +321,33 @@ export class Sound {
 				break;
 			case 'click':
 				this._tone( { type: 'triangle', f0: 1200, dur: 0.04, gain: 0.08 } );
+				break;
+			case 'jump':
+				// a rising warp whine and a thump
+				this._tone( { type: 'sawtooth', f0: 80, f1: 1600, dur: 1.1, gain: 0.14, attack: 0.05 } );
+				this._tone( { type: 'sine', f0: 220, f1: 3200, dur: 1.2, gain: 0.12, attack: 0.1 } );
+				this._noise( { dur: 1.3, gain: 0.55, type: 'bandpass', f0: 200, f1: 6000, q: 1.2 } );
+				this._tone( { f0: 60, f1: 30, dur: 0.6, gain: 0.5 } );
+				break;
+			case 'warpin':
+				this._noise( { dur: 1.6, gain: 0.8, f0: 6000, f1: 80 } );
+				this._tone( { f0: 110, f1: 40, dur: 1.2, gain: 0.5 } );
+				arp( [ 262, 392, 523, 784 ], 'triangle', 0.05, 0.1, 0.8 );
+				break;
+			case 'ring': {
+
+				// each ring in a chain a step higher
+				const k = Math.pow( 2, [ 0, 4, 7, 11, 12, 16, 19 ][ Math.min( 6, Math.max( 0, step - 1 ) ) ] / 12 );
+				this._tone( { type: 'triangle', f0: 660 * k, f1: 990 * k, dur: 0.25, gain: 0.16 } );
+				this._tone( { type: 'sine', f0: 1320 * k, dur: 0.3, gain: 0.08, delay: 0.04 } );
+				this._noise( { dur: 0.25, gain: 0.18, type: 'highpass', f0: 3000, f1: 9000 } );
+				break;
+
+			}
+
+			case 'chain':
+				arp( [ 523, 659, 784, 1047, 1319, 1568, 2093 ], 'square', 0.05, 0.07, 0.25 );
+				this._tone( { type: 'triangle', f0: 2093, dur: 0.9, gain: 0.1, delay: 0.35 } );
 				break;
 
 		}

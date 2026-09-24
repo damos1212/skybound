@@ -171,17 +171,30 @@ export class Starship {
 
 		}
 
-		// plumes
+		this._addPlumes( dc );
+		this._addBubble( len * 0.5 + 1, R * 4.5, len * 0.75 );
+
+		this.height = len + 1.5;
+		this.colliders = [ { x: 0, y: 2.5, r: 2.2 }, { x: 0, y: len * 0.5, r: R * 1.2 }, { x: 0, y: len * 0.85, r: R }, { x: - R - 2.8, y: 3.2, r: 1.6 }, { x: R + 2.8, y: 3.2, r: 1.6 } ];
+		this.mouthY = len * 0.3;
+		this.envelopeH = len * 0.4;
+		this.bagSlots = [];
+
+	}
+
+	// drive plumes out of every nozzle ( { x, z, r } ), in the drive's colour
+	_addPlumes( dc, y = - 0.9, length = 10 ) {
+
 		this.plumeMat.set( 'tint', dc );
 		this.plumes = this.nozzles.map( ( n ) => {
 
-			const g = new ConeGeometry( n.r * 0.9, 10, 18, 1, true ).rotateX( Math.PI ).translate( 0, - 5, 0 );
+			const g = new ConeGeometry( n.r * 0.9, length, 18, 1, true ).rotateX( Math.PI ).translate( 0, - length / 2, 0 );
 			const P = g.getAttribute( 'position' );
 			const uv = new Float32Array( P.count * 2 );
-			for ( let i = 0; i < P.count; i ++ ) uv[ i * 2 + 1 ] = - P.getY( i ) / 10;
+			for ( let i = 0; i < P.count; i ++ ) uv[ i * 2 + 1 ] = - P.getY( i ) / length;
 			g.setAttribute( 'uv', new Float32BufferAttribute( uv, 2 ) );
 			const m = new Mesh( g, this.plumeMat );
-			m.position.set( n.x, - 0.9, n.z );
+			m.position.set( n.x, y, n.z );
 			m.layers.set( 2 );
 			this.group.add( m );
 			return m;
@@ -189,18 +202,17 @@ export class Starship {
 		} );
 		this.driveColor = dc;
 
+	}
+
+	// the bumper bubble around the hull
+	_addBubble( cy, rx, ry ) {
+
 		this.bubble = new Mesh( new SphereGeometry( 1, 32, 20 ), this.shieldMat );
-		this.bubble.position.set( 0, len * 0.5 + 1, 0 );
-		this.bubble.scale.set( R * 4.5, len * 0.75, R * 4.5 );
+		this.bubble.position.set( 0, cy, 0 );
+		this.bubble.scale.set( rx, ry, rx );
 		this.bubble.layers.set( 2 );
 		this.bubble.visible = false;
 		this.group.add( this.bubble );
-
-		this.height = len + 1.5;
-		this.colliders = [ { x: 0, y: 2.5, r: 2.2 }, { x: 0, y: len * 0.5, r: R * 1.2 }, { x: 0, y: len * 0.85, r: R }, { x: - R - 2.8, y: 3.2, r: 1.6 }, { x: R + 2.8, y: 3.2, r: 1.6 } ];
-		this.mouthY = len * 0.3;
-		this.envelopeH = len * 0.4;
-		this.bagSlots = [];
 
 	}
 

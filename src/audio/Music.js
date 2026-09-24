@@ -7,6 +7,8 @@ const MOODS = {
 	hangar: { bpm: 92, chords: [ [ 0, 4, 7, 11 ], [ 5, 9, 12, 16 ], [ 9, 12, 16, 19 ], [ 7, 11, 14, 17 ] ], root: 57, arp: 0.55, bass: 1, pad: 0.8, echo: 0.25 },
 	flight: { bpm: 112, chords: [ [ 0, 4, 7, 14 ], [ 9, 12, 16, 19 ], [ 5, 9, 12, 16 ], [ 7, 11, 14, 19 ] ], root: 57, arp: 0.8, bass: 1, pad: 0.6, echo: 0.3 },
 	space: { bpm: 70, chords: [ [ 0, 7, 14, 16 ], [ 5, 12, 16, 21 ], [ - 3, 4, 11, 16 ], [ 2, 9, 14, 17 ] ], root: 50, arp: 0.35, bass: 0.6, pad: 1, echo: 0.55 },
+	// the Warpship and the Ark: minor, driving, huge echoes
+	cosmic: { bpm: 100, chords: [ [ 0, 7, 15, 19 ], [ - 4, 3, 8, 15 ], [ 3, 10, 15, 19 ], [ - 2, 5, 10, 14 ] ], root: 50, arp: 0.95, bass: 1, pad: 1, echo: 0.5 },
 	results: { bpm: 84, chords: [ [ 0, 4, 7, 12 ], [ 5, 9, 12, 17 ] ], root: 60, arp: 0.4, bass: 0.7, pad: 0.8, echo: 0.3 },
 };
 
@@ -137,7 +139,7 @@ export class Music {
 			}
 
 			// a soft tick on the beat in flight
-			if ( this.mood === 'flight' && beat % 4 === 2 ) this._note( { f: 5200, t, dur: 0.03, type: 'square', gain: 0.006 * this.intensity, cutoff: 8000 } );
+			if ( ( this.mood === 'flight' || this.mood === 'cosmic' ) && beat % 4 === 2 ) this._note( { f: 5200, t, dur: 0.03, type: 'square', gain: 0.006 * this.intensity, cutoff: 8000 } );
 			this.step ++;
 			this.nextTime += sixteenth;
 
