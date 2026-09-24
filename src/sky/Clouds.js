@@ -30,14 +30,14 @@ const f = ( x ) => {
 
 const DEG = Math.PI / 180;
 
-// "Partly cloudy": scattered fair-weather cumulus
+// "Partly cloudy": scattered fair-weather cumulus, a few of them towering
 const PRESET = {
 	atmosphere: { multipleScattering: 0.99 },
 	shape: {
-		altitude: 1500, thickness: 3400, density: 0.022, coverage: 0.52,
+		altitude: 1500, thickness: 3400, density: 0.03, coverage: 0.49,
 		horizonCoverageStart: 20000, horizonCoverageRamp: 45000, horizonCoverageAmount: 0.12,
-		edgeSoftness: 0.095, edgeSoftnessFalloff: 1, weatherScale: 29000, baseScale: 7500, baseStrength: 0.69,
-		erosionScaleBaseMultiplier: 0.13, erosionStrengthBase: 0.24, erosionStrengthPeak: 2.15, erosionShape: 1,
+		edgeSoftness: 0.06, edgeSoftnessFalloff: 1, weatherScale: 26000, baseScale: 6200, baseStrength: 0.9,
+		erosionScaleBaseMultiplier: 0.13, erosionStrengthBase: 0.28, erosionStrengthPeak: 2.4, erosionShape: 1,
 		baseWeatherStrength: 0.54, baseWeatherHeightStart: 0, baseWeatherHeightEnd: 0.13,
 	},
 	lighting: {
