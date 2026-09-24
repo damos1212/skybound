@@ -53,7 +53,8 @@ const FRAME_FIELDS = {
 	windDir: [ 'vec2f', new Vector2( 0.35, 0.94 ).normalize() ],
 	// 1 when the frame renders with reversed depth (always, except shadow maps)
 	reversedDepth: [ 'f32', 1 ],
-	pad0: [ 'f32', 0 ],
+	// floating origin: real x = drawn x + originX (real y = drawn y - seaLevel)
+	originX: [ 'f32', 0 ],
 	// free slots for experiments / debug views
 	debug: [ 'vec4f', new Vector4() ],
 };
@@ -88,6 +89,7 @@ export const G = {
 	time: F.time,
 	dt: F.dt,
 	seaLevel: F.seaLevel,
+	originX: F.originX,
 	sunDir: F.sunDir,
 	sunColor: F.sunColor,
 	skyIrradiance: F.skyIrradiance,

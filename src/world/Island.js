@@ -28,7 +28,8 @@ export function islandHeight( x, z ) {
 	const ex = ( x - ISLAND.center[ 0 ] ) / ISLAND.radii[ 0 ], ez = ( z - ISLAND.center[ 1 ] ) / ISLAND.radii[ 1 ];
 	const de = Math.sqrt( ex * ex + ez * ez );
 	const mask = smooth( 1.05, 0.7, de );
-	let h = - 14 + 15.2 * mask;
+	// (beyond the island's shelf the seabed drops away to the deep ocean)
+	let h = - 14 + 15.2 * mask - 60 * smooth( 1.15, 1.8, de );
 	for ( const [ cx, cz, r, a ] of ISLAND.hills ) {
 
 		const dx = x - cx, dz = z - cz;
@@ -58,13 +59,133 @@ export const islandModule = new ShaderModule( {
 	code: /* wgsl */`
 fn islandHeight( p: vec2f ) -> f32 {
 	let e = ( p - vec2f( ${ f( ISLAND.center[ 0 ] ) }, ${ f( ISLAND.center[ 1 ] ) } ) ) / vec2f( ${ f( ISLAND.radii[ 0 ] ) }, ${ f( ISLAND.radii[ 1 ] ) } );
-	let mask = smoothstep( 1.05, 0.7, length( e ) );
-	var h = -14.0 + 15.2 * mask;
+	let de = length( e );
+	let mask = smoothstep( 1.05, 0.7, de );
+	var h = -14.0 + 15.2 * mask - 60.0 * smoothstep( 1.15, 1.8, de );
 ${ ISLAND.hills.map( ( [ cx, cz, r, a ] ) => `	{ let d = p - vec2f( ${ f( cx ) }, ${ f( cz ) } ); h += ${ f( a ) } * exp( - dot( d, d ) / ${ f( r * r ) } ) * mask; }` ).join( '\n' ) }
 	h += ( 3.0 * sin( p.x * 0.021 + p.y * 0.013 ) * sin( p.y * 0.017 - p.x * 0.011 ) + 1.2 * sin( p.x * 0.052 ) * sin( p.y * 0.047 ) ) * mask * mask;
 	let pd = length( vec2f( p.x - ${ f( LAUNCH.x ) }, ( p.y - ${ f( LAUNCH.z ) } + 18.0 ) * 1.3 ) );
 	h = mix( h, max( h, 1.4 ), smoothstep( 45.0, 20.0, pd ) );
 	return h;
+}
+
+fn islandHash( p: vec2f ) -> f32 {
+	var q = fract( p * vec2f( 123.34, 456.21 ) );
+	q += dot( q, q + 45.32 );
+	return fract( q.x * q.y );
+}
+fn islandNoise( p: vec2f ) -> f32 {
+	let i = floor( p );
+	let f = fract( p );
+	let u = f * f * ( 3.0 - 2.0 * f );
+	return mix( mix( islandHash( i ), islandHash( i + vec2f( 1.0, 0.0 ) ), u.x ), mix( islandHash( i + vec2f( 0.0, 1.0 ) ), islandHash( i + vec2f( 1.0, 1.0 ) ), u.x ), u.y );
+}
+fn islandFbm( p: vec2f ) -> f32 {
+	return islandNoise( p ) * 0.55 + islandNoise( p * 2.07 + vec2f( 5.2, 1.3 ) ) * 0.3 + islandNoise( p * 4.13 + vec2f( 2.7, 8.1 ) ) * 0.15;
+}
+// gradient of a noise layer (for detail normals)
+fn islandNoiseGrad( p: vec2f, k: f32 ) -> vec2f {
+	let e = 0.12;
+	let c = islandNoise( p * k );
+	return vec2f( islandNoise( ( p + vec2f( e, 0.0 ) ) * k ) - c, islandNoise( ( p + vec2f( 0.0, e ) ) * k ) - c ) / e;
+}
+
+// the island's normal per pixel (finer than its mesh)
+fn islandNormal( p: vec2f ) -> vec3f {
+	let e = 0.35;
+	let hx = islandHeight( p + vec2f( e, 0.0 ) ) - islandHeight( p - vec2f( e, 0.0 ) );
+	let hz = islandHeight( p + vec2f( 0.0, e ) ) - islandHeight( p - vec2f( 0.0, e ) );
+	return normalize( vec3f( -hx, 2.0 * e, -hz ) );
+}
+
+struct IslandGround { albedo: vec3f, rough: f32, normal: vec3f, wet: f32 };
+
+// what the ground looks like at real position p (xz), height h (m above the sea), normal n: dry and
+// wet sand with wind ripples, the seabed with its own ripples and seagrass, grass with patches, dry
+// spots and flowers, rock on the steep slopes. Fine detail fades with the viewing distance.
+fn islandGround( p: vec2f, h: f32, n: vec3f, dist: f32 ) -> IslandGround {
+	var g: IslandGround;
+	let near = 1.0 - smoothstep( 25.0, 140.0, dist );
+	let mid = 1.0 - smoothstep( 250.0, 1400.0, dist );
+	let slope = 1.0 - n.y;
+	let big = islandFbm( p * 0.035 );
+	let small = islandFbm( p * 0.27 + vec2f( 7.0, 3.0 ) );
+	var dN = vec2f( 0.0 );
+
+	// sand: ripples across the wind, grains, darker and glossy where the swash keeps it wet
+	let wind = normalize( vec2f( 0.35, 0.94 ) );
+	let rp = dot( p, wind ) * 2.4 + islandNoise( p * 0.35 ) * 5.0;
+	let ripple = sin( rp );
+	var sand = vec3f( 0.84, 0.64, 0.33 ) * ( 0.9 + small * 0.18 ) * ( 0.96 + ripple * 0.04 * near );
+	sand *= 0.93 + islandHash( floor( p * 30.0 ) ) * 0.14 * near;
+	dN += wind * cos( rp ) * 0.12 * near;
+	let wet = smoothstep( 1.1, 0.25, h );
+	sand = mix( sand, sand * vec3f( 0.5, 0.48, 0.46 ), wet );
+
+	// the seabed: paler sand in big ripples, darker with depth, patches of seagrass
+	let bp = dot( p, vec2f( 0.8, 0.6 ) ) * 0.9 + islandNoise( p * 0.12 ) * 6.0;
+	let seagrass = smoothstep( 0.62, 0.72, islandFbm( p * 0.06 + vec2f( 3.0 ) ) ) * smoothstep( -1.5, -3.5, h );
+	var bed = vec3f( 0.62, 0.52, 0.3 ) * ( 0.88 + small * 0.2 ) * ( 0.95 + sin( bp ) * 0.05 );
+	bed = mix( bed, vec3f( 0.09, 0.14, 0.05 ) * ( 0.7 + small * 0.6 ), seagrass );
+	bed = mix( bed, bed * 0.75, smoothstep( -2.0, -12.0, h ) );
+
+	// grass: two greens in big patches, dry yellow spots, blades, flowers
+	var grass = mix( vec3f( 0.13, 0.36, 0.05 ), vec3f( 0.05, 0.2, 0.03 ), big );
+	grass = mix( grass, vec3f( 0.36, 0.34, 0.1 ), smoothstep( 0.58, 0.78, small ) * 0.55 );
+	grass *= 0.85 + islandNoise( p * 3.1 ) * 0.3 * near;
+	let fl = islandHash( floor( p * 3.0 ) + vec2f( 17.0 ) );
+	let flowerCol = select( select( vec3f( 0.95, 0.9, 0.85 ), vec3f( 0.95, 0.75, 0.1 ), fl > 0.9935 ), vec3f( 0.9, 0.3, 0.55 ), fl > 0.997 );
+	let fp = fract( p * 3.0 ) - 0.5;
+	let flower = step( 0.99, fl ) * smoothstep( 0.2, 0.08, length( fp ) ) * near;
+	grass = mix( grass, flowerCol, flower );
+	let gN = ( islandNoiseGrad( p, 5.5 ) * 0.06 + islandNoiseGrad( p, 0.8 ) * 0.1 ) * near;
+
+	// rock: grey strata, a little lichen
+	let strata = sin( h * 2.6 + islandNoise( p * 0.2 ) * 4.0 ) * 0.5 + 0.5;
+	var rock = mix( vec3f( 0.22, 0.2, 0.18 ), vec3f( 0.33, 0.3, 0.26 ), strata ) * ( 0.85 + small * 0.3 );
+	rock = mix( rock, vec3f( 0.3, 0.32, 0.12 ), smoothstep( 0.62, 0.75, islandFbm( p * 0.5 ) ) * 0.4 );
+	let rN = islandNoiseGrad( p, 0.9 ) * 0.5 * mid;
+
+	// layers: seabed -> wet sand -> dry sand -> grass (ragged edge), rock on steep slopes
+	var alb = mix( bed, sand, smoothstep( -0.6, 0.0, h ) );
+	var rough = mix( 0.8, mix( 0.9, 0.35, wet ), smoothstep( -0.6, 0.0, h ) );
+	let gK = smoothstep( 2.4, 4.2, h + ( big - 0.5 ) * 3.0 + small * 0.8 ) * ( 1.0 - smoothstep( 0.25, 0.45, slope ) );
+	alb = mix( alb, grass, gK );
+	rough = mix( rough, 0.95, gK );
+	dN = mix( dN, gN, gK );
+	let rK = smoothstep( 0.3, 0.52, slope + ( small - 0.5 ) * 0.15 ) * smoothstep( 2.0, 6.0, h );
+	alb = mix( alb, rock, rK );
+	rough = mix( rough, 0.75, rK );
+	dN = mix( dN, rN, rK );
+
+	g.albedo = alb;
+	g.rough = rough;
+	g.wet = wet * ( 1.0 - gK );
+	g.normal = normalize( n + vec3f( -dN.x, 0.0, -dN.y ) );
+	return g;
+}
+
+// caustics on the seabed: two drifting networks of bright lines (the edges of animated cells)
+fn islandCausticLayer( p: vec2f, t: f32 ) -> f32 {
+	let i = floor( p );
+	let f = fract( p );
+	var d1 = 8.0;
+	var d2 = 8.0;
+	for ( var y = -1; y <= 1; y++ ) {
+		for ( var x = -1; x <= 1; x++ ) {
+			let g = vec2f( f32( x ), f32( y ) );
+			let h = vec2f( islandHash( i + g ), islandHash( i + g + vec2f( 31.0, 17.0 ) ) );
+			let o = 0.5 + 0.42 * sin( t * ( 0.6 + h * 0.5 ) + h * 6.2831 );
+			let d = length( g + o - f );
+			if ( d < d1 ) { d2 = d1; d1 = d; } else if ( d < d2 ) { d2 = d; }
+		}
+	}
+	return 1.0 - smoothstep( 0.0, 0.16, d2 - d1 );
+}
+fn islandCaustics( p: vec2f, t: f32 ) -> f32 {
+	let a = islandCausticLayer( p * 0.55, t * 0.9 );
+	let b = islandCausticLayer( p * 0.55 * 1.37 + vec2f( 3.7, 1.3 ), t * 1.1 + 2.0 );
+	return a * b * 2.2 + ( a + b ) * 0.22;
 }
 `,
 } );
@@ -224,7 +345,7 @@ function lighthouse( b, x, z ) {
 
 }
 
-function palm( b, x, z, r ) {
+function palm( b, x, z, r, f = b ) {
 
 	const y = islandHeight( x, z ) - 0.3;
 	const h = 7 + r() * 5, lean = ( r() - 0.5 ) * 0.5, yaw = r() * Math.PI * 2;
@@ -252,7 +373,58 @@ function palm( b, x, z, r ) {
 
 		const a = i / fronds * Math.PI * 2 + r() * 0.4;
 		const len = 3.6 + r() * 1.2;
-		b.add( new BoxGeometry( len, 0.12, 0.9 ), { position: [ px + Math.cos( a ) * len * 0.45, py - 0.35, pz + Math.sin( a ) * len * 0.45 ], rotation: [ 0, - a, - 0.45 - r() * 0.2 ], color: r() > 0.5 ? 0x3f8f35 : 0x2f7a2c, flat: true } );
+		f.add( new BoxGeometry( len, 0.12, 0.9 ), { position: [ px + Math.cos( a ) * len * 0.45, py - 0.35, pz + Math.sin( a ) * len * 0.45 ], rotation: [ 0, - a, - 0.45 - r() * 0.2 ], color: r() > 0.5 ? 0x3f8f35 : 0x2f7a2c, flat: true } );
+		// a drooping tip
+		f.add( new BoxGeometry( len * 0.45, 0.1, 0.7 ), { position: [ px + Math.cos( a ) * len * 0.98, py - 0.35 - len * 0.32, pz + Math.sin( a ) * len * 0.98 ], rotation: [ 0, - a, - 0.95 - r() * 0.2 ], color: 0x2f7a2c, flat: true } );
+
+	}
+
+}
+
+// a broadleaf jungle tree: a trunk and a few lumpy blobs of canopy
+function tree( b, f, x, z, r ) {
+
+	const y = islandHeight( x, z ) - 0.4;
+	const h = 6 + r() * 7, w = 2.4 + r() * 2.2;
+	b.add( new CylinderGeometry( 0.3, 0.5, h, 7 ), { position: [ x, y + h / 2, z ], rotation: [ ( r() - 0.5 ) * 0.15, 0, ( r() - 0.5 ) * 0.15 ], color: 0x6b4f35 } );
+	const greens = [ 0x2e7d32, 0x3f8f35, 0x256b2a, 0x4a9a3a, 0x5aa33a ];
+	const n = 3 + Math.floor( r() * 3 );
+	for ( let i = 0; i < n; i ++ ) {
+
+		const a = r() * Math.PI * 2, d = i === 0 ? 0 : w * ( 0.4 + r() * 0.35 );
+		const s = w * ( i === 0 ? 1 : 0.6 + r() * 0.3 );
+		f.add( new IcosahedronGeometry( s, 1 ), { position: [ x + Math.cos( a ) * d, y + h + ( i === 0 ? 0.4 : - r() * 1.2 ), z + Math.sin( a ) * d ], scale: [ 1, 0.72 + r() * 0.2, 1 ], color: greens[ Math.floor( r() * greens.length ) ], flat: true, jitter: 0.18 } );
+
+	}
+
+}
+
+// a bush: a clump of small blobs, sometimes flowering
+function bush( f, x, z, r ) {
+
+	const y = islandHeight( x, z ) - 0.2;
+	const n = 2 + Math.floor( r() * 3 );
+	const flowers = r() < 0.3 ? [ 0xff5a8a, 0xffc93c, 0xf4efe6, 0xff7a3c ][ Math.floor( r() * 4 ) ] : 0;
+	for ( let i = 0; i < n; i ++ ) {
+
+		const s = 0.8 + r() * 0.9;
+		const px = x + ( r() - 0.5 ) * 2.2, pz = z + ( r() - 0.5 ) * 2.2;
+		f.add( new IcosahedronGeometry( s, 1 ), { position: [ px, y + s * 0.55, pz ], scale: [ 1, 0.8, 1 ], color: r() > 0.5 ? 0x357a2f : 0x4a8f35, flat: true, jitter: 0.2 } );
+		if ( flowers ) for ( let k = 0; k < 4; k ++ ) f.add( new IcosahedronGeometry( 0.14, 0 ), { position: [ px + ( r() - 0.5 ) * s * 1.4, y + s * ( 0.7 + r() * 0.5 ), pz + ( r() - 0.5 ) * s * 1.4 ], color: flowers } );
+
+	}
+
+}
+
+// a tuft of grass blades
+function tuft( f, x, z, r ) {
+
+	const y = islandHeight( x, z ) - 0.05;
+	const n = 4 + Math.floor( r() * 4 );
+	for ( let i = 0; i < n; i ++ ) {
+
+		const a = r() * Math.PI * 2, h = 0.5 + r() * 0.6;
+		f.add( new ConeGeometry( 0.06, h, 3 ), { position: [ x + Math.cos( a ) * 0.18, y + h / 2, z + Math.sin( a ) * 0.18 ], rotation: [ ( r() - 0.5 ) * 0.7, 0, ( r() - 0.5 ) * 0.7 ], color: r() > 0.5 ? 0x5d9a2c : 0x7aa83a } );
 
 	}
 
@@ -322,7 +494,25 @@ export class Island {
 		scene.add( this.group );
 		const mats = toyMaterials();
 
-		this.terrainMaterial = new Material( { name: 'island-terrain', vertexColors: true, roughness: 0.92 } );
+		// the terrain: shaded per pixel from the analytic height (normals finer than the mesh) with the
+		// ground's procedural look; real coordinates through the floating origin
+		this.terrainMaterial = new Material( {
+			name: 'island-terrain', roughness: 0.92,
+			modules: [ islandModule ],
+			surface: /* wgsl */`
+	let pr = in.P.xz + vec2f( frame.originX, 0.0 );
+	let h = in.P.y - frame.seaLevel;
+	let n0 = islandNormal( pr );
+	let g = islandGround( pr, h, n0, length( in.P - frame.cameraPos ) );
+	s.albedo = g.albedo;
+	s.roughness = g.rough;
+	s.normal = g.normal;
+	s.specularIntensity = mix( 0.5, 1.0, g.wet );
+	// the shallows under a thin sheet of water catch the caustics
+	let sub = smoothstep( 0.3, -0.4, h );
+	s.albedo *= 1.0 + islandCaustics( pr, frame.time ) * sub * 0.8;
+`,
+		} );
 		const terrain = new Mesh( buildTerrain(), this.terrainMaterial );
 		terrain.receiveShadow = true;
 		terrain.castShadow = true;
@@ -334,17 +524,80 @@ export class Island {
 		hangar( b, - 46, - 34, 0.35 );
 		this.lampPos = lighthouse( b, 150, - 330 );
 		const r = rng( 7 );
+		// foliage (fronds, canopies, bushes, grass): its own mesh, swaying, lit through from behind
+		const fb = new ToyBuilder();
+		const clear = ( x, z, pad = 22 ) => Math.hypot( x - LAUNCH.x, z - LAUNCH.z ) < pad || Math.hypot( x + 46, z + 34 ) < 22 || Math.hypot( x - 150, z + 330 ) < 14;
 		let placed = 0;
-		for ( let tries = 0; tries < 900 && placed < 70; tries ++ ) {
+		for ( let tries = 0; tries < 2400 && placed < 110; tries ++ ) {
 
 			const x = - 380 + r() * 700, z = - 420 + r() * 420;
 			const h = islandHeight( x, z );
-			if ( h < 1.6 || h > 38 ) continue;
-			if ( Math.hypot( x - LAUNCH.x, z - LAUNCH.z ) < 22 || Math.hypot( x + 46, z + 34 ) < 22 || Math.hypot( x - 150, z + 330 ) < 14 ) continue;
-			palm( b, x, z, r );
+			// palms crowd the beach fringe, thin out uphill
+			if ( h < 1.6 || h > 38 || ( h > 7 && r() < 0.75 ) ) continue;
+			if ( clear( x, z ) ) continue;
+			palm( b, x, z, r, fb );
 			placed ++;
 
 		}
+
+		placed = 0;
+		for ( let tries = 0; tries < 3000 && placed < 150; tries ++ ) {
+
+			const x = - 400 + r() * 720, z = - 450 + r() * 450;
+			const h = islandHeight( x, z );
+			if ( h < 7 || clear( x, z, 30 ) ) continue;
+			// denser on the hills
+			if ( r() > smooth( 6, 30, h ) + 0.15 ) continue;
+			tree( b, fb, x, z, r );
+			placed ++;
+
+		}
+
+		placed = 0;
+		for ( let tries = 0; tries < 3000 && placed < 220; tries ++ ) {
+
+			const x = - 400 + r() * 720, z = - 450 + r() * 460;
+			const h = islandHeight( x, z );
+			if ( h < 2.6 || clear( x, z, 12 ) ) continue;
+			bush( fb, x, z, r );
+			placed ++;
+
+		}
+
+		// grass tufts where the camera looks most: around the pad and up the slope behind it
+		placed = 0;
+		for ( let tries = 0; tries < 4000 && placed < 520; tries ++ ) {
+
+			const x = - 140 + r() * 260, z = - 160 + r() * 150;
+			const h = islandHeight( x, z );
+			if ( h < 3.2 || clear( x, z, 9 ) ) continue;
+			tuft( fb, x, z, r );
+			placed ++;
+
+		}
+
+		this.foliageMaterial = new Material( {
+			name: 'foliage', vertexColors: true, roughness: 0.75,
+			modules: [ islandModule ],
+			vertex: /* wgsl */`
+	// sway in the wind: more the higher above the ground (real coordinates for the ground height)
+	let wp0 = ( v.model * vec4f( v.position, 1.0 ) ).xyz;
+	let pr = wp0.xz + vec2f( frame.originX, 0.0 );
+	let above = max( wp0.y - frame.seaLevel - islandHeight( pr ), 0.0 );
+	let k = min( above * above * 0.004, 0.6 );
+	let ph = frame.time * 1.3 + pr.x * 0.08 + pr.y * 0.05;
+	v.worldOffset = vec3f( sin( ph ) * 0.35 + sin( ph * 2.3 ) * 0.1, 0.0, cos( ph * 0.8 ) * 0.25 ) * k;
+	v.prevWorldOffset = vec3f( sin( ph - frame.dt * 1.3 ) * 0.35 + sin( ( ph - frame.dt * 1.3 ) * 2.3 ) * 0.1, 0.0, cos( ( ph - frame.dt * 1.3 ) * 0.8 ) * 0.25 ) * k;
+`,
+			surface: /* wgsl */`
+	s.translucency = s.albedo * 0.22;
+	s.albedo *= 0.9 + fract( sin( dot( floor( in.P.xz * 0.5 ), vec2f( 12.9898, 78.233 ) ) ) * 43758.5453 ) * 0.2;
+`,
+		} );
+		const foliage = new Mesh( fb.build(), this.foliageMaterial );
+		foliage.castShadow = true;
+		foliage.receiveShadow = true;
+		this.group.add( foliage );
 
 		for ( let i = 0; i < 40; i ++ ) {
 

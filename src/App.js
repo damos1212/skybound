@@ -14,6 +14,7 @@ import { Ocean } from './ocean/Ocean.js';
 import { Island } from './world/Island.js';
 import { Post } from './post/Post.js';
 import { Particles } from './fx/Particles.js';
+import { installGroundBounce, installContactShadows, installCloudShadows, GroundBounce } from './world/Lighting.js';
 
 // Owns the renderer and the world systems (sky, clouds, sea, island, particles) and runs the frame.
 // The game (src/game) drives the camera and adds its objects to `scene`.
@@ -108,6 +109,9 @@ export class App {
 		this.sceneRenderer.background = this.sky.background;
 		this.post = new Post( engine, { sceneRenderer: this.sceneRenderer, camera, atmosphere: this.atmosphere, clouds: this.clouds } );
 		this.sceneRenderer.onBeforeWater = () => this.post.composite();
+		installGroundBounce();
+		installCloudShadows( this.clouds );
+		installContactShadows( this.sceneRenderer.opaqueCopy.depthTexture );
 		G.exposure.value = this.settings.exposure;
 
 		this.updateSun();
@@ -300,6 +304,7 @@ export class App {
 		const alt = cam.position.y + this.originY;
 		this.realAltitude = alt;
 		G.seaLevel.value = - this.originY;
+		G.originX.value = this.originX;
 
 		this.updateSun();
 		this.updateSkyParams( this.space ? this.space.altitude : alt, dt );
@@ -313,6 +318,7 @@ export class App {
 		const world = this.worldVisible && ! this.space;
 		this.island.group.position.set( - this.originX, - this.originY, 0 );
 		this.island.group.visible = world && alt < 150000;
+		GroundBounce.strength.value = world && alt < 20000 ? 1 : 0;
 		this.ocean.mesh.visible = world;
 		if ( world ) {
 
