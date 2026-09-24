@@ -121,3 +121,153 @@ export function dropBag( s ) {
 	return true;
 
 }
+
+// ------------------------------------------------------------------------------------------ rocket
+// Thrust along the rocket's axis (tilted by steering), gravity falling off with altitude, quadratic
+// drag in the air. Solid boosters light with the main engine, burn out and drop away.
+
+export const EARTH_R = 6371000;
+
+export function gravityAt( y ) {
+
+	const k = EARTH_R / ( EARTH_R + Math.max( 0, y ) );
+	return G * k * k;
+
+}
+
+export function createRocketState( stats ) {
+
+	return {
+		x: 0, y: 0, vx: 0, vy: 0, angle: 0,
+		fuel: stats.fuel, boosterFuel: stats.boosterTime, boosters: stats.boosters > 0, boosterLit: false, separated: false,
+		hull: stats.hull, leak: 0, burning: false, popped: false, grounded: true, time: 0, maxY: 0, kick: 0, bags: 0,
+		throttle: 0,
+	};
+
+}
+
+export function stepRocket( s, stats, input, dt, groundY = 0 ) {
+
+	s.time += dt;
+	const rho = airDensity( s.y );
+	s.burning = !! input.burn && s.fuel > 0 && ! s.popped;
+	let thrust = 0;
+	if ( s.burning ) {
+
+		thrust += stats.thrust;
+		s.fuel = Math.max( 0, s.fuel - dt );
+
+	}
+
+	// solids can't be throttled: once lit they burn out
+	if ( s.boosters && s.boosterFuel > 0 && ( s.boosterLit || s.burning ) && ! s.popped ) {
+
+		s.boosterLit = true;
+		thrust += stats.boosterThrust;
+		s.boosterFuel -= dt;
+		if ( s.boosterFuel <= 0 ) {
+
+			s.boosters = false;
+			s.separated = true;
+
+		}
+
+	}
+
+	s.throttle = thrust;
+	// steering tilts the rocket (up to ~35°), it weathervanes back upright in the air
+	const target = ( input.steer || 0 ) * 0.62;
+	const rate = stats.steer * 1.2;
+	s.angle += MathClamp( target - s.angle, - rate * dt, rate * dt );
+	const g = gravityAt( s.y );
+	let ax = Math.sin( s.angle ) * thrust;
+	let ay = Math.cos( s.angle ) * thrust - g;
+	// reaction control: a little sideways push even when coasting
+	ax += ( input.steer || 0 ) * 2.5 * stats.steer * ( s.popped ? 0 : 1 );
+	const sp = Math.hypot( s.vx, s.vy );
+	const k = stats.drag * rho * ( s.popped ? 3 : 1 );
+	ax -= k * sp * s.vx;
+	ay -= k * sp * s.vy;
+	s.vx += ax * dt;
+	s.vy += ay * dt;
+	s.x += s.vx * dt;
+	s.y += s.vy * dt;
+	if ( s.y <= groundY ) {
+
+		s.y = groundY;
+		if ( s.vy < 0 ) s.vy = 0;
+		s.vx *= Math.max( 0, 1 - 6 * dt );
+		s.grounded = true;
+
+	} else s.grounded = false;
+
+	s.maxY = Math.max( s.maxY, s.y );
+	return s;
+
+}
+
+function MathClamp( v, a, b ) {
+
+	return v < a ? a : v > b ? b : v;
+
+}
+
+// ---------------------------------------------------------------------------------------- starship
+// Exponential flight: every second of burn multiplies the speed by e^boost, so the route's
+// astronomical distances fit in a minute of play. `d` is the path distance from the Earth's surface
+// (m); `x` the sideways position in the gameplay plane (dodging).
+
+export const ORBIT_START = 400000;
+export const ORBIT_SPEED = 7800;
+export const WARP_FROM = 6.0e12;
+
+export function createShipState( stats ) {
+
+	return {
+		x: 0, y: 0, vx: 0, vy: 0,
+		d: ORBIT_START, u: Math.log( ORBIT_SPEED ), v: ORBIT_SPEED,
+		fuel: stats.fuel, hull: stats.hull, heat: 0, leak: 0,
+		burning: false, popped: false, time: 0, maxY: ORBIT_START, kick: 0, bags: 0,
+	};
+
+}
+
+// sunFlux: 0.. (1 at the Sun flyby distance), from the route
+// maxAdvance (m/s): caps how fast the route distance grows (flybys play out in slow motion)
+export function stepShip( s, stats, input, dt, sunFlux = 0, maxAdvance = Infinity ) {
+
+	s.time += dt;
+	s.burning = !! input.burn && s.fuel > 0 && ! s.popped;
+	let boost = stats.boost;
+	if ( stats.warp && s.d > WARP_FROM ) boost *= 10;
+	if ( s.burning ) {
+
+		s.u += boost * dt;
+		s.fuel = Math.max( 0, s.fuel - dt );
+
+	} else {
+
+		s.u -= 0.004 * dt;
+		if ( stats.regen > 0 && ! s.popped ) s.fuel = Math.min( stats.fuel, s.fuel + stats.regen * dt );
+
+	}
+
+	if ( s.kick > 0 ) {
+
+		s.u += Math.min( s.kick, dt * 2 ) * 0.15;
+		s.kick = Math.max( 0, s.kick - dt * 2 );
+
+	}
+
+	s.v = Math.exp( s.u );
+	s.d += Math.min( s.v, maxAdvance ) * dt;
+	s.maxY = Math.max( s.maxY, s.d );
+	// heat from the Sun (1 unit per second at the flyby with no shield), radiated away slowly
+	s.heat = Math.max( 0, s.heat + ( sunFlux * 0.9 * stats.heat - 0.25 ) * dt );
+	// sideways thrusters
+	const target = ( input.steer || 0 ) * stats.steer * ( s.popped ? 0.2 : 1 );
+	s.vx += ( target - s.vx ) * Math.min( 1, dt * 3 );
+	s.x += s.vx * dt;
+	return s;
+
+}

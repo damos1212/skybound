@@ -1,5 +1,6 @@
 // Synthesized sound (Web Audio, no samples): wind that rises with speed and thins out with
-// altitude, the surf near the sea, the burner's roar, and one-shot effects.
+// altitude, the surf near the sea, the balloon burner's roar, the rocket's thunder, the Starship's
+// drive hum, and one-shot effects. The music (Music.js) plays through the same master bus.
 
 export class Sound {
 
@@ -7,7 +8,9 @@ export class Sound {
 
 		this.ctx = null;
 		this.muted = false;
+		this.volume = 0.85;
 		this.burn = 0;
+		this.onUnlock = null;
 
 	}
 
@@ -24,20 +27,21 @@ export class Sound {
 		if ( ! AC ) return;
 		const ctx = this.ctx = new AC();
 		this.master = ctx.createGain();
-		this.master.gain.value = this.muted ? 0 : 0.8;
+		this.master.gain.value = this.muted ? 0 : 1;
 		const comp = ctx.createDynamicsCompressor();
 		comp.threshold.value = - 14;
 		comp.ratio.value = 4;
 		this.master.connect( comp ).connect( ctx.destination );
+		this.sfx = ctx.createGain();
+		this.sfx.gain.value = this.volume;
+		this.sfx.connect( this.master );
 
-		// noise source shared by the loops
 		const len = ctx.sampleRate * 2;
 		const buf = ctx.createBuffer( 1, len, ctx.sampleRate );
 		const d = buf.getChannelData( 0 );
 		let b0 = 0, b1 = 0, b2 = 0;
 		for ( let i = 0; i < len; i ++ ) {
 
-			// pinkish noise (Paul Kellet's economy filter)
 			const w = Math.random() * 2 - 1;
 			b0 = 0.99765 * b0 + w * 0.099046;
 			b1 = 0.963 * b1 + w * 0.2965164;
@@ -59,7 +63,7 @@ export class Sound {
 			f.Q.value = q;
 			const g = ctx.createGain();
 			g.gain.value = 0;
-			src.connect( f ).connect( g ).connect( this.master );
+			src.connect( f ).connect( g ).connect( this.sfx );
 			src.start();
 			return { f, g };
 
@@ -68,24 +72,41 @@ export class Sound {
 		this.wind = loop( 'bandpass', 500, 0.7 );
 		this.surf = loop( 'lowpass', 700, 0.5 );
 		this.roar = loop( 'lowpass', 900, 1.2 );
-		// burner rumble
-		const osc = ctx.createOscillator();
-		osc.type = 'sawtooth';
-		osc.frequency.value = 55;
-		const of = ctx.createBiquadFilter();
-		of.type = 'lowpass';
-		of.frequency.value = 180;
-		this.rumble = ctx.createGain();
-		this.rumble.gain.value = 0;
-		osc.connect( of ).connect( this.rumble ).connect( this.master );
-		osc.start();
+		this.thunder = loop( 'lowpass', 220, 0.9 );
+		const osc = ( type, f, cutoff ) => {
+
+			const o = ctx.createOscillator();
+			o.type = type;
+			o.frequency.value = f;
+			const lp = ctx.createBiquadFilter();
+			lp.type = 'lowpass';
+			lp.frequency.value = cutoff;
+			const g = ctx.createGain();
+			g.gain.value = 0;
+			o.connect( lp ).connect( g ).connect( this.sfx );
+			o.start();
+			return { o, g, lp };
+
+		};
+
+		this.rumble = osc( 'sawtooth', 55, 180 );
+		this.hum = osc( 'sine', 110, 800 );
+		this.hum2 = osc( 'triangle', 165.5, 1200 );
+		if ( this.onUnlock ) this.onUnlock( ctx, this.master );
 
 	}
 
 	setMuted( m ) {
 
 		this.muted = m;
-		if ( this.master ) this.master.gain.setTargetAtTime( m ? 0 : 0.8, this.ctx.currentTime, 0.05 );
+		if ( this.master ) this.master.gain.setTargetAtTime( m ? 0 : 1, this.ctx.currentTime, 0.05 );
+
+	}
+
+	setVolume( v ) {
+
+		this.volume = v;
+		if ( this.sfx ) this.sfx.gain.setTargetAtTime( v, this.ctx.currentTime, 0.05 );
 
 	}
 
@@ -93,7 +114,6 @@ export class Sound {
 
 		if ( ! this.ctx ) {
 
-			// the first click or key anywhere starts the audio
 			if ( ! this._armed ) {
 
 				this._armed = true;
@@ -108,22 +128,37 @@ export class Sound {
 		}
 
 		const t = this.ctx.currentTime;
-		const s = game.flight;
-		const flying = game.state === 'flight';
-		const alt = s ? s.y : 0;
-		const speed = s ? Math.hypot( s.vx, s.vy ) : 0;
-		const thin = Math.exp( - alt / 9000 );
-		const wind = Math.min( 1, 0.08 + speed / 70 ) * ( 0.25 + 0.75 * thin ) * ( flying ? 1 : 0.5 );
+		const s = game.s;
+		const v = game.vehicle;
+		const flying = game.state === 'flight' || game.state === 'ascent';
+		const space = game.mode === 'space';
+		const alt = game.realH ? game.realH() : 0;
+		const lp = game.lp;
+		const speed = lp ? Math.hypot( lp.vx, lp.vy ) : 0;
+		const thin = space ? 0 : Math.exp( - alt / 9000 );
+		const wind = Math.min( 1, 0.08 + speed / 70 ) * ( 0.15 + 0.85 * thin ) * ( flying ? 1 : 0.5 ) * ( space ? 0 : 1 );
 		this.wind.g.gain.setTargetAtTime( wind * 0.5, t, 0.3 );
 		this.wind.f.frequency.setTargetAtTime( 300 + speed * 12, t, 0.3 );
-		const sea = Math.exp( - Math.max( 0, alt - 5 ) / 120 );
+		const sea = space ? 0 : Math.exp( - Math.max( 0, alt - 5 ) / 120 );
 		this.surf.g.gain.setTargetAtTime( sea * 0.35, t, 0.4 );
 		this.surf.f.frequency.setTargetAtTime( 500 + Math.sin( t * 0.4 ) * 250, t, 0.5 );
-		const burning = s && s.burning ? 1 : 0;
+		const burning = s && s.burning && ! s.popped ? 1 : 0;
 		this.burn += ( burning - this.burn ) * Math.min( 1, dt * ( burning ? 12 : 5 ) );
-		this.roar.g.gain.setTargetAtTime( this.burn * 0.55, t, 0.04 );
-		this.rumble.gain.setTargetAtTime( this.burn * 0.12, t, 0.04 );
+		const b = this.burn;
+		// the balloon's burner, the rocket's engine (muffled once the air is gone), the drive's hum
+		const inAir = space ? 0.15 : 0.35 + 0.65 * thin;
+		this.roar.g.gain.setTargetAtTime( v === 'balloon' ? b * 0.55 : 0, t, 0.04 );
 		this.roar.f.frequency.setTargetAtTime( 700 + Math.random() * 300, t, 0.05 );
+		const boosters = s && s.boosterLit && s.boosters ? 1 : 0;
+		this.thunder.g.gain.setTargetAtTime( v === 'rocket' ? ( b * 0.9 + boosters * 0.6 ) * inAir : 0, t, 0.05 );
+		this.thunder.f.frequency.setTargetAtTime( 180 + b * 140 + Math.random() * 40, t, 0.05 );
+		this.rumble.g.gain.setTargetAtTime( ( v === 'balloon' ? b * 0.12 : v === 'rocket' ? ( b + boosters ) * 0.14 * inAir : 0 ), t, 0.04 );
+		const hum = v === 'starship' && ( flying || game.state === 'countdown' ) ? 0.04 + b * 0.1 : 0;
+		const pitch = v === 'starship' && s && s.v ? 90 + Math.min( 220, Math.log10( Math.max( 1, s.v / 7800 ) ) * 22 ) : 110;
+		this.hum.g.gain.setTargetAtTime( hum, t, 0.1 );
+		this.hum2.g.gain.setTargetAtTime( hum * 0.6, t, 0.1 );
+		this.hum.o.frequency.setTargetAtTime( pitch, t, 0.2 );
+		this.hum2.o.frequency.setTargetAtTime( pitch * 1.505, t, 0.2 );
 
 	}
 
@@ -140,7 +175,7 @@ export class Sound {
 		g.gain.setValueAtTime( 0, t );
 		g.gain.linearRampToValueAtTime( gain, t + attack );
 		g.gain.exponentialRampToValueAtTime( 0.0001, t + dur );
-		o.connect( g ).connect( this.master );
+		o.connect( g ).connect( this.sfx );
 		o.start( t );
 		o.stop( t + dur + 0.05 );
 
@@ -159,7 +194,7 @@ export class Sound {
 		const g = ctx.createGain();
 		g.gain.setValueAtTime( gain, t );
 		g.gain.exponentialRampToValueAtTime( 0.0001, t + dur );
-		src.connect( f ).connect( g ).connect( this.master );
+		src.connect( f ).connect( g ).connect( this.sfx );
 		src.start( t, Math.random() );
 		src.stop( t + dur + 0.05 );
 
@@ -168,6 +203,7 @@ export class Sound {
 	play( name ) {
 
 		if ( ! this.ctx ) return;
+		const arp = ( notes, type = 'triangle', gap = 0.08, gain = 0.16, dur = 0.35 ) => notes.forEach( ( f, i ) => this._tone( { type, f0: f, dur, gain, delay: i * gap } ) );
 		switch ( name ) {
 
 			case 'coin':
@@ -179,7 +215,18 @@ export class Sound {
 				this._tone( { f0: 360, f1: 900, dur: 0.2, gain: 0.15, delay: 0.1 } );
 				break;
 			case 'star':
-				[ 660, 830, 990, 1320 ].forEach( ( f, i ) => this._tone( { type: 'triangle', f0: f, dur: 0.18, gain: 0.18, delay: i * 0.06 } ) );
+				arp( [ 660, 830, 990, 1320 ], 'triangle', 0.06, 0.18, 0.18 );
+				break;
+			case 'orb':
+				arp( [ 523, 784, 1047 ], 'sine', 0.05, 0.2, 0.3 );
+				this._noise( { dur: 0.3, gain: 0.15, type: 'highpass', f0: 4000, f1: 9000 } );
+				break;
+			case 'boost':
+				this._noise( { dur: 0.8, gain: 0.5, type: 'bandpass', f0: 300, f1: 3000, q: 1.5 } );
+				this._tone( { type: 'sawtooth', f0: 110, f1: 440, dur: 0.6, gain: 0.12 } );
+				break;
+			case 'rescue':
+				arp( [ 587, 740, 880, 1175 ], 'square', 0.09, 0.07, 0.25 );
 				break;
 			case 'hit':
 				this._noise( { dur: 0.35, gain: 0.8, f0: 3000, f1: 150 } );
@@ -189,9 +236,16 @@ export class Sound {
 				this._noise( { dur: 0.5, gain: 0.9, type: 'highpass', f0: 1200, f1: 4000, q: 2 } );
 				this._tone( { type: 'sawtooth', f0: 90, f1: 60, dur: 0.4, gain: 0.3 } );
 				break;
+			case 'thunder':
+				this._noise( { dur: 1.6, gain: 0.35, f0: 600, f1: 60 } );
+				break;
 			case 'pop':
 				this._noise( { dur: 0.6, gain: 1.0, f0: 6000, f1: 100 } );
 				this._tone( { f0: 300, f1: 40, dur: 0.5, gain: 0.5 } );
+				break;
+			case 'explosion':
+				this._noise( { dur: 1.8, gain: 1.2, f0: 2500, f1: 40 } );
+				this._tone( { f0: 90, f1: 25, dur: 1.2, gain: 0.7 } );
 				break;
 			case 'shield':
 				this._tone( { f0: 400, f1: 1400, dur: 0.18, gain: 0.25 } );
@@ -199,6 +253,17 @@ export class Sound {
 				break;
 			case 'launch':
 				this._noise( { dur: 1.2, gain: 0.5, type: 'bandpass', f0: 200, f1: 1200, q: 1.2 } );
+				break;
+			case 'ignition':
+				this._noise( { dur: 2.2, gain: 0.9, f0: 300, f1: 1800, q: 0.7 } );
+				this._tone( { type: 'sawtooth', f0: 40, f1: 70, dur: 1.5, gain: 0.3 } );
+				break;
+			case 'separation':
+				this._noise( { dur: 0.4, gain: 0.7, type: 'highpass', f0: 800, f1: 2500 } );
+				this._tone( { type: 'square', f0: 200, f1: 90, dur: 0.25, gain: 0.2 } );
+				break;
+			case 'tick':
+				this._tone( { type: 'square', f0: 880, dur: 0.08, gain: 0.12 } );
 				break;
 			case 'bag':
 				this._tone( { f0: 120, f1: 60, dur: 0.2, gain: 0.4 } );
@@ -210,7 +275,18 @@ export class Sound {
 				break;
 			case 'zoneNew':
 			case 'record':
-				[ 523, 659, 784, 1047, 1319 ].forEach( ( f, i ) => this._tone( { type: 'triangle', f0: f, dur: 0.35, gain: 0.16, delay: i * 0.08 } ) );
+				arp( [ 523, 659, 784, 1047, 1319 ] );
+				break;
+			case 'achievement':
+				arp( [ 784, 988, 1175, 1568 ], 'square', 0.07, 0.07, 0.3 );
+				this._tone( { type: 'triangle', f0: 1568, dur: 0.8, gain: 0.1, delay: 0.3 } );
+				break;
+			case 'unlock':
+				arp( [ 392, 523, 659, 784, 1047, 1319, 1568 ], 'triangle', 0.07, 0.16, 0.5 );
+				break;
+			case 'select':
+				this._tone( { type: 'triangle', f0: 660, dur: 0.08, gain: 0.12 } );
+				this._tone( { type: 'triangle', f0: 990, dur: 0.1, gain: 0.1, delay: 0.05 } );
 				break;
 			case 'buy':
 				this._tone( { type: 'square', f0: 988, dur: 0.07, gain: 0.1 } );
@@ -222,6 +298,9 @@ export class Sound {
 				break;
 			case 'end':
 				[ 392, 494, 587 ].forEach( ( f, i ) => this._tone( { type: 'sine', f0: f, dur: 0.9, gain: 0.12, delay: i * 0.05, attack: 0.05 } ) );
+				break;
+			case 'click':
+				this._tone( { type: 'triangle', f0: 1200, dur: 0.04, gain: 0.08 } );
 				break;
 
 		}

@@ -1,259 +1,83 @@
 import { Group } from '../engine/scene/Group.js';
-import { Mesh } from '../engine/scene/Mesh.js';
-import { Material } from '../engine/render/Material.js';
-import { BoxGeometry, CylinderGeometry, SphereGeometry, ConeGeometry, IcosahedronGeometry, TorusGeometry, RoundedBoxGeometry } from '../engine/geometry/index.js';
-import { Vector3, MathUtils } from '../engine/math/index.js';
-import { ToyBuilder, toyMaterials } from '../world/Toy.js';
+import { CylinderGeometry } from '../engine/geometry/index.js';
+import { ToyBuilder } from '../world/Toy.js';
 import { islandHeight } from '../world/Island.js';
 import { windAt } from './Physics.js';
+import { zoneAt } from './Zones.js';
+import { models, mats, mesh } from './Models.js';
 
-// Everything in the air besides the player: hazards (birds, kites, drones, gliders, planes, storm
-// cells, airliners, weather balloons, jets) and pickups (coins, fuel cans). Spawned ahead of the
-// climbing balloon by altitude, moved, collided in the gameplay plane and recycled when left behind.
+// Everything in the air (or the void) besides the player: hazards and pickups, spawned ahead of the
+// climbing vehicle by altitude / route zone, moved, collided in the gameplay plane (x, y) and
+// recycled once left behind.
+//
+// Coordinates are the game's local frame (see App.originY): on the ground it is the real world; high
+// up and in space the player's local y advances at a capped "visual" speed, so the obstacles come at a
+// dodgeable pace whatever the true speed. `ctx.h` is the real altitude / route distance (m) that picks
+// what spawns, `ctx.hRate` the real metres per local metre ahead.
 
-// ------------------------------------------------------------------ models (built once)
-
-let MODELS = null;
-
-function models() {
-
-	if ( MODELS ) return MODELS;
-	const M = MODELS = {};
-	const T = () => new ToyBuilder();
-
-	// gull (body + one wing, mirrored at runtime)
-	M.gullBody = T()
-		.add( new SphereGeometry( 0.45, 12, 8 ), { scale: [ 1, 0.8, 2.0 ], color: 0xf7f7f2 } )
-		.add( new SphereGeometry( 0.3, 10, 8 ), { position: [ 0, 0.18, 0.75 ], color: 0xf7f7f2 } )
-		.add( new ConeGeometry( 0.1, 0.45, 6 ), { position: [ 0, 0.14, 1.15 ], rotation: [ Math.PI / 2, 0, 0 ], color: 0xffb020 } )
-		.add( new SphereGeometry( 0.05, 6, 4 ), { position: [ 0.16, 0.28, 0.9 ], color: 0x111111 } )
-		.add( new SphereGeometry( 0.05, 6, 4 ), { position: [ - 0.16, 0.28, 0.9 ], color: 0x111111 } )
-		.add( new BoxGeometry( 0.5, 0.08, 0.5 ), { position: [ 0, 0, - 0.95 ], rotation: [ 0.1, Math.PI / 4, 0 ], color: 0xdadada } )
-		.build();
-	M.gullWing = T()
-		.add( new BoxGeometry( 1.6, 0.08, 0.7 ), { position: [ 0.8, 0, 0 ], color: 0xb9c0c7, flat: true } )
-		.add( new BoxGeometry( 0.5, 0.07, 0.55 ), { position: [ 1.8, 0, - 0.05 ], color: 0x2a2d33, flat: true } )
-		.build();
-	M.gooseBody = T()
-		.add( new SphereGeometry( 0.5, 12, 8 ), { scale: [ 1, 0.85, 2.1 ], color: 0x7a634d } )
-		.add( new CylinderGeometry( 0.12, 0.15, 0.9, 8 ), { position: [ 0, 0.25, 1.2 ], rotation: [ 1.1, 0, 0 ], color: 0x1d1d1f } )
-		.add( new SphereGeometry( 0.2, 10, 8 ), { position: [ 0, 0.45, 1.6 ], color: 0x1d1d1f } )
-		.add( new BoxGeometry( 0.3, 0.12, 0.08 ), { position: [ 0, 0.4, 1.6 ], color: 0xf2f2f2 } )
-		.add( new ConeGeometry( 0.08, 0.3, 6 ), { position: [ 0, 0.42, 1.85 ], rotation: [ Math.PI / 2, 0, 0 ], color: 0x222222 } )
-		.build();
-	M.gooseWing = T()
-		.add( new BoxGeometry( 1.9, 0.08, 0.8 ), { position: [ 0.95, 0, 0 ], color: 0x8b7358, flat: true } )
-		.add( new BoxGeometry( 0.6, 0.07, 0.6 ), { position: [ 2.1, 0, - 0.05 ], color: 0x3a2e24, flat: true } )
-		.build();
-
-	// kite: diamond sail + cross spars + a bowed tail
-	const kite = T();
-	kite.add( new BoxGeometry( 2.2, 2.2, 0.06 ), { rotation: [ 0, 0, Math.PI / 4 ], scale: [ 0.75, 1.0, 1 ], color: 0xff5a36, flat: true } );
-	kite.add( new BoxGeometry( 1.6, 1.6, 0.07 ), { position: [ 0, 0, 0.01 ], rotation: [ 0, 0, Math.PI / 4 ], scale: [ 0.75, 1.0, 1 ], color: 0xffc93c, flat: true } );
-	kite.add( new CylinderGeometry( 0.03, 0.03, 3.0, 5 ), { position: [ 0, 0, 0.06 ], color: 0x5a3b22 } );
-	kite.add( new CylinderGeometry( 0.03, 0.03, 2.2, 5 ), { position: [ 0, 0.3, 0.06 ], rotation: [ 0, 0, Math.PI / 2 ], color: 0x5a3b22 } );
-	for ( let i = 0; i < 5; i ++ ) kite.add( new BoxGeometry( 0.35, 0.18, 0.04 ), { position: [ Math.sin( i * 1.3 ) * 0.25, - 1.7 - i * 0.55, 0 ], rotation: [ 0, 0, i * 0.5 ], color: [ 0x3aa0ff, 0x3ccf6e, 0xff5a36, 0xffc93c, 0xb070ff ][ i ] } );
-	M.kite = kite.build();
-
-	// quadcopter
-	const drone = T();
-	drone.add( new RoundedBoxGeometry( 0.7, 0.28, 0.7, 2, 0.1 ), { color: 0xf4efe6 } );
-	for ( const a of [ 0.785, 2.356, 3.927, 5.498 ] ) {
-
-		drone.add( new BoxGeometry( 1.1, 0.08, 0.12 ), { position: [ Math.cos( a ) * 0.55, 0.05, Math.sin( a ) * 0.55 ], rotation: [ 0, - a, 0 ], color: 0x2b2f36 } );
-		drone.add( new CylinderGeometry( 0.12, 0.12, 0.2, 8 ), { position: [ Math.cos( a ) * 1.05, 0.1, Math.sin( a ) * 1.05 ], color: 0x2b2f36 } );
-		drone.add( new CylinderGeometry( 0.48, 0.48, 0.03, 16 ), { position: [ Math.cos( a ) * 1.05, 0.22, Math.sin( a ) * 1.05 ], color: 0x9fb4c4 } );
-
-	}
-
-	drone.add( new SphereGeometry( 0.14, 8, 6 ), { position: [ 0, - 0.18, 0.3 ], color: 0x1d2433 } );
-	M.drone = drone.build();
-	M.droneLed = T().add( new SphereGeometry( 0.09, 8, 6 ), { position: [ 0, 0.16, - 0.36 ], color: 0xff2020 } ).build();
-
-	// paraglider: arched canopy of cells, lines and a pilot
-	const pg = T();
-	const cells = 9;
-	for ( let i = 0; i < cells; i ++ ) {
-
-		const a = ( i / ( cells - 1 ) - 0.5 ) * 2.2;
-		pg.add( new RoundedBoxGeometry( 1.25, 0.35, 2.4, 1, 0.12 ), { position: [ Math.sin( a ) * 5, Math.cos( a ) * 5 - 5, 0 ], rotation: [ 0, 0, - a ], color: i % 2 ? 0x3ccf6e : 0xfaf3e3 } );
-
-	}
-
-	pg.add( new SphereGeometry( 0.35, 10, 8 ), { position: [ 0, - 6.8, 0 ], color: 0xff5a36 } );
-	pg.add( new RoundedBoxGeometry( 0.6, 0.9, 0.5, 2, 0.15 ), { position: [ 0, - 7.5, 0 ], color: 0x2f6fde } );
-	M.paraglider = pg.build();
-
-	// seaplane (toy float plane)
-	const sp = T();
-	sp.add( new CylinderGeometry( 0.8, 0.55, 7, 12 ), { rotation: [ 0, 0, Math.PI / 2 ], color: 0xe2463a } );
-	sp.add( new SphereGeometry( 0.8, 12, 8 ), { position: [ 3.5, 0, 0 ], color: 0xe2463a } );
-	sp.add( new SphereGeometry( 0.62, 12, 8 ), { position: [ 1.8, 0.55, 0 ], scale: [ 1.2, 0.8, 1 ], color: 0x9fd4ea } );
-	sp.add( new RoundedBoxGeometry( 1.6, 0.18, 11, 1, 0.08 ), { position: [ 1.2, 0.85, 0 ], color: 0xfaf3e3 } );
-	sp.add( new RoundedBoxGeometry( 1.0, 1.6, 0.16, 1, 0.06 ), { position: [ - 3.2, 0.9, 0 ], color: 0xfaf3e3 } );
-	sp.add( new RoundedBoxGeometry( 0.9, 0.14, 3.2, 1, 0.06 ), { position: [ - 3.2, 0.25, 0 ], color: 0xfaf3e3 } );
-	for ( const z of [ - 1.4, 1.4 ] ) {
-
-		sp.add( new CylinderGeometry( 0.28, 0.22, 4.2, 10 ), { position: [ 1.0, - 1.6, z ], rotation: [ 0, 0, Math.PI / 2 ], color: 0xfaf3e3 } );
-		sp.add( new BoxGeometry( 0.08, 1.2, 0.08 ), { position: [ 1.6, - 0.9, z ], color: 0x3b3b44 } );
-
-	}
-
-	sp.add( new ConeGeometry( 0.3, 0.6, 10 ), { position: [ 4.4, 0, 0 ], rotation: [ 0, 0, - Math.PI / 2 ], color: 0x3b3b44 } );
-	M.seaplane = sp.build();
-	M.prop = T().add( new BoxGeometry( 0.08, 2.4, 0.22 ), { color: 0x2b2f36 } ).build();
-
-	// storm cell: a heap of dark puffs; lightning bolt (emissive)
-	const st = T();
-	for ( let i = 0; i < 14; i ++ ) {
-
-		const a = i * 2.4, r = 6 + ( i % 4 ) * 3;
-		st.add( new IcosahedronGeometry( 5 + ( i % 3 ) * 2.2, 1 ), { position: [ Math.cos( a ) * r, Math.sin( i * 1.7 ) * 3 + ( i % 5 ) * 1.2, Math.sin( a ) * r * 0.5 ], color: i % 3 ? 0x5b6270 : 0x474d59, flat: true, jitter: 0.15 } );
-
-	}
-
-	M.storm = st.build();
-	const bolt = T();
-	let bx = 0, by = 0;
-	for ( let i = 0; i < 7; i ++ ) {
-
-		const nx = bx + ( i % 2 ? 1.6 : - 1.4 ), ny = by - 4.2;
-		const mid = new Vector3( ( bx + nx ) / 2, ( by + ny ) / 2, 0 );
-		const len = Math.hypot( nx - bx, ny - by );
-		bolt.add( new BoxGeometry( 0.35, len, 0.35 ), { position: [ mid.x, mid.y, 0 ], rotation: [ 0, 0, Math.atan2( nx - bx, by - ny ) ], color: 0xdfe8ff } );
-		bx = nx; by = ny;
-
-	}
-
-	M.bolt = bolt.build();
-
-	// airliner
-	const al = T();
-	al.add( new CylinderGeometry( 2.2, 2.2, 34, 16 ), { rotation: [ 0, 0, Math.PI / 2 ], color: 0xf6f6f2 } );
-	al.add( new SphereGeometry( 2.2, 16, 10 ), { position: [ 17, 0, 0 ], scale: [ 1.6, 1, 1 ], color: 0xf6f6f2 } );
-	al.add( new ConeGeometry( 2.2, 7, 16 ), { position: [ - 20.5, 0.6, 0 ], rotation: [ 0, 0, Math.PI / 2 ], scale: [ 1, 1, 1 ], color: 0xf6f6f2 } );
-	al.add( new CylinderGeometry( 2.25, 2.25, 34, 16, 1, true, 0, Math.PI ), { position: [ 0, - 0.02, 0 ], rotation: [ 0, 0, Math.PI / 2 ], scale: [ 1, 1, 1 ], color: 0x2f6fde } );
-	al.add( new BoxGeometry( 7, 0.5, 36 ), { position: [ 1, - 0.6, 0 ], rotation: [ 0, 0, 0 ], scale: [ 1, 1, 1 ], color: 0xdde3ea } );
-	al.add( new BoxGeometry( 5, 7, 0.5 ), { position: [ - 19, 4.2, 0 ], rotation: [ 0, 0, 0.35 ], color: 0x2f6fde } );
-	al.add( new BoxGeometry( 4, 0.4, 12 ), { position: [ - 19.5, 1.2, 0 ], color: 0xdde3ea } );
-	for ( const z of [ - 7, 7 ] ) al.add( new CylinderGeometry( 1.1, 1.0, 4.5, 12 ), { position: [ 3, - 1.9, z ], rotation: [ 0, 0, Math.PI / 2 ], color: 0xc9d0d8 } );
-	for ( let i = 0; i < 14; i ++ ) al.add( new BoxGeometry( 0.7, 0.55, 0.1 ), { position: [ 12 - i * 2, 0.7, 2.18 ], color: 0x1d2433 } );
-	M.airliner = al.build();
-	M.contrail = T().add( new CylinderGeometry( 1.2, 0.35, 1, 10, 1, true ), { rotation: [ 0, 0, Math.PI / 2 ], color: 0xffffff } ).build();
-
-	// weather balloon + radiosonde
-	const wb = T();
-	wb.add( new SphereGeometry( 3.2, 20, 14 ), { scale: [ 1, 1.1, 1 ], color: 0xf4f0e8 } );
-	wb.add( new CylinderGeometry( 0.02, 0.02, 6, 4 ), { position: [ 0, - 6.3, 0 ], color: 0x444444 } );
-	wb.add( new BoxGeometry( 0.6, 0.5, 0.6 ), { position: [ 0, - 9.5, 0 ], color: 0xff5a36 } );
-	M.weather = wb.build();
-
-	// fighter jet
-	const jt = T();
-	jt.add( new CylinderGeometry( 0.8, 0.9, 12, 10 ), { rotation: [ 0, 0, Math.PI / 2 ], color: 0x8e99a6 } );
-	jt.add( new ConeGeometry( 0.8, 4, 10 ), { position: [ 8, 0, 0 ], rotation: [ 0, 0, - Math.PI / 2 ], color: 0x8e99a6 } );
-	jt.add( new SphereGeometry( 0.6, 10, 8 ), { position: [ 3.5, 0.6, 0 ], scale: [ 2, 0.8, 1 ], color: 0xffc93c } );
-	jt.add( new BoxGeometry( 5, 0.2, 9 ), { position: [ - 1.5, 0, 0 ], rotation: [ 0, 0, 0 ], color: 0x7b8591, flat: true } );
-	jt.add( new BoxGeometry( 2.5, 3, 0.2 ), { position: [ - 5, 1.6, 0 ], rotation: [ 0, 0, 0.5 ], color: 0x7b8591 } );
-	M.jet = jt.build();
-
-	// pickups
-	M.coin = T()
-		.add( new CylinderGeometry( 0.9, 0.9, 0.2, 24 ), { rotation: [ Math.PI / 2, 0, 0 ], color: 0xffc93c } )
-		.add( new CylinderGeometry( 0.62, 0.62, 0.24, 24 ), { rotation: [ Math.PI / 2, 0, 0 ], color: 0xffe07a } )
-		.build();
-	M.fuel = T()
-		.add( new RoundedBoxGeometry( 1.2, 1.5, 0.6, 2, 0.12 ), { color: 0xe2463a } )
-		.add( new BoxGeometry( 0.5, 0.2, 0.2 ), { position: [ 0.2, 0.85, 0 ], color: 0x2b2f36 } )
-		.add( new BoxGeometry( 0.7, 0.18, 0.62 ), { position: [ 0, 0.2, 0 ], color: 0xffc93c } )
-		.add( new CylinderGeometry( 0.015, 0.015, 2.2, 3 ), { position: [ - 0.9, 1.8, 0 ], rotation: [ 0, 0, - 0.4 ], color: 0x444444 } )
-		.add( new CylinderGeometry( 0.015, 0.015, 2.2, 3 ), { position: [ 0.9, 1.8, 0 ], rotation: [ 0, 0, 0.4 ], color: 0x444444 } )
-		.add( new SphereGeometry( 1.8, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2 ), { position: [ 0, 2.6, 0 ], scale: [ 1, 0.55, 1 ], color: 0xfaf3e3 } )
-		.build();
-	M.star = T().add( new IcosahedronGeometry( 1.1, 0 ), { color: 0xb070ff, flat: true } ).build();
-
-	return M;
-
-}
-
-// ------------------------------------------------------------------ materials
-
-let MATS = null;
-
-function mats() {
-
-	if ( MATS ) return MATS;
-	const toy = toyMaterials();
-	MATS = {
-		paint: toy.paint,
-		matte: toy.matte,
-		metal: toy.metal,
-		glow: toy.glow,
-		gold: new Material( { name: 'gold', vertexColors: true, roughness: 0.25, metalness: 1, emissive: [ 0.25, 0.16, 0.02 ] } ),
-		cloud: new Material( { name: 'storm', vertexColors: true, roughness: 1, surface: 's.albedo *= 0.9;' } ),
-		bolt: new Material( { name: 'bolt', lit: false, vertexColors: true, surface: 's.emissive = s.albedo * 40.0; s.albedo = vec3f( 0.0 );' } ),
-		trail: new Material( {
-			name: 'contrail', lit: false, transparent: true, depthWrite: false, vertexColors: true, uniforms: { fade: [ 'f32', 1 ] },
-			surface: /* wgsl */`
-	let edge = pow( sat( abs( dot( in.N, in.V ) ) ), 1.5 );
-	s.emissive = ( frame.sunColor * 0.18 + frame.skyIrradiance * 2.4 ) * 1.0;
-	s.albedo = vec3f( 0.0 );
-	s.alpha = edge * 0.65 * mat.fade;
-`,
-		} ),
-		star: new Material( { name: 'star', vertexColors: true, roughness: 0.2, emissive: [ 0.5, 0.2, 0.9 ] } ),
-	};
-	MATS.trail.side = 'double';
-	return MATS;
-
-}
-
-function mesh( geo, mat, shadow = true ) {
-
-	const m = new Mesh( geo, mat );
-	m.castShadow = shadow;
-	return m;
-
-}
-
-// ------------------------------------------------------------------ hazard types
-
-// y ranges (m), relative spawn weight, damage
+// type registry: min / max (real metres) or zones (ids), weight, damage, flags
 const TYPES = {
+	// ---- Earth
 	gulls: { min: 20, max: 1400, weight: 3, damage: 1 },
 	kite: { min: 25, max: 260, weight: 2, damage: 1 },
 	drone: { min: 120, max: 1600, weight: 2, damage: 1 },
-	paraglider: { min: 350, max: 2600, weight: 1.2, damage: 1 },
-	seaplane: { min: 500, max: 3200, weight: 1.2, damage: 2 },
+	heli: { min: 150, max: 1800, weight: 1.2, damage: 2, warn: true },
+	hangglider: { min: 200, max: 1500, weight: 1, damage: 1 },
+	rival: { min: 300, max: 4000, weight: 1, damage: 1 },
+	paraglider: { min: 350, max: 2600, weight: 1, damage: 1 },
+	seaplane: { min: 500, max: 3200, weight: 1.2, damage: 2, warn: true },
+	blimp: { min: 600, max: 2600, weight: 0.8, damage: 2 },
 	storm: { min: 1800, max: 5200, weight: 1.6, damage: 1 },
 	geese: { min: 1100, max: 6500, weight: 2, damage: 1 },
-	airliner: { min: 6500, max: 12500, weight: 1.5, damage: 3 },
-	weather: { min: 7000, max: 32000, weight: 1.2, damage: 1 },
-	jet: { min: 9500, max: 22000, weight: 1.3, damage: 2 },
+	airliner: { min: 6500, max: 12500, weight: 1.5, damage: 3, warn: true },
+	weather: { min: 7000, max: 36000, weight: 1.2, damage: 1 },
+	jet: { min: 9500, max: 22000, weight: 1.3, damage: 2, warn: true },
+	ufo: { min: 3000, max: 90000, weight: 0.5, damage: 2, night: true },
+	// ---- near space
+	meteor: { min: 40000, max: 1.2e6, weight: 2.2, damage: 2 },
+	satellite: { min: 150000, max: 4.2e7, weight: 2.2, damage: 2 },
+	debris: { min: 200000, max: 4.2e7, weight: 2.6, damage: 1 },
+	// ---- deep space
+	asteroid: { zones: [ 'cislunar', 'moon', 'mars', 'jupiter' ], weight: 2.5, damage: 2 },
+	flare: { zones: [ 'sun' ], weight: 3, damage: 2 },
+	ice: { zones: [ 'saturn', 'neptune', 'kuiper' ], weight: 3, damage: 1 },
+	comet: { zones: [ 'jupiter', 'saturn', 'neptune', 'kuiper', 'interstellar' ], weight: 1.4, damage: 2, warn: true },
+	spaceufo: { zones: [ 'mars', 'kuiper', 'interstellar', 'blackhole' ], weight: 1, damage: 2 },
+	whale: { zones: [ 'neptune', 'kuiper', 'interstellar' ], weight: 0.5, damage: 3 },
+	spacedebris: { zones: [ 'moon', 'mars', 'sun', 'jupiter', 'saturn', 'neptune', 'kuiper', 'interstellar', 'blackhole' ], weight: 1.5, damage: 1 },
 };
 
-function pickType( y, rnd ) {
+function pickType( h, zoneId, night, rnd ) {
 
 	let total = 0;
 	const opts = [];
 	for ( const k in TYPES ) {
 
 		const t = TYPES[ k ];
-		if ( y < t.min || y > t.max ) continue;
-		// fade in / out at the ends of the range
-		const w = t.weight * Math.min( 1, ( y - t.min ) / 150 + 0.3 ) * Math.min( 1, ( t.max - y ) / 300 + 0.2 );
-		opts.push( [ k, w ] );
-		total += w;
+		if ( t.night && ! night ) continue;
+		let w = 0;
+		if ( t.zones ) {
+
+			if ( t.zones.includes( zoneId ) ) w = t.weight;
+
+		} else if ( h >= t.min && h <= t.max ) {
+
+			const span = t.max - t.min;
+			w = t.weight * Math.min( 1, ( h - t.min ) / Math.max( 150, span * 0.1 ) + 0.3 ) * Math.min( 1, ( t.max - h ) / Math.max( 300, span * 0.1 ) + 0.2 );
+
+		}
+
+		if ( w > 0 ) {
+
+			opts.push( [ k, w ] );
+			total += w;
+
+		}
 
 	}
 
 	let r = rnd() * total;
-	for ( const [ k, w ] of opts ) {
-
-		if ( ( r -= w ) <= 0 ) return k;
-
-	}
-
+	for ( const [ k, w ] of opts ) if ( ( r -= w ) <= 0 ) return k;
 	return opts.length ? opts[ opts.length - 1 ][ 0 ] : null;
 
 }
@@ -273,112 +97,180 @@ function mulberry( seed ) {
 
 }
 
+const ORB_COLORS = { shieldOrb: [ 0.4, 0.8, 1.0 ], magnetOrb: [ 1.0, 0.35, 0.3 ], boostOrb: [ 1.0, 0.8, 0.2 ] };
+
 export class Hazards {
 
-	constructor( scene ) {
+	constructor( scene, particles ) {
 
 		this.scene = scene;
+		this.particles = particles;
 		this.group = new Group();
 		this.group.name = 'hazards';
 		scene.add( this.group );
 		this.items = [];
 		this.pickups = [];
 		this.rnd = mulberry( 1 );
-		this.nextHazardY = 0;
-		this.nextCoinY = 0;
-		this.nextFuelY = 0;
-		this.nextStarY = 0;
+		this.onEvent = null;
 		models();
-		mats();
+		const X = mats();
+		this.orbMats = {};
+		for ( const k in ORB_COLORS ) {
+
+			this.orbMats[ k ] = X.orb.clone();
+			this.orbMats[ k ].set( 'tint', ORB_COLORS[ k ] );
+
+		}
+
+		this.reset();
 
 	}
 
-	reset( seed = ( Math.random() * 1e9 ) | 0 ) {
+	reset( seed = ( Math.random() * 1e9 ) | 0, startY = 0 ) {
 
-		for ( const h of this.items ) this.group.remove( h.mesh );
+		for ( const h of this.items ) this._remove( h );
 		for ( const p of this.pickups ) this.group.remove( p.mesh );
 		this.items = [];
 		this.pickups = [];
 		this.rnd = mulberry( seed );
-		this.nextHazardY = 45;
-		this.nextCoinY = 18;
-		this.nextFuelY = 140;
-		this.nextStarY = 900;
+		this.nextHazardY = startY + 45;
+		this.nextCoinY = startY + 18;
+		this.nextFuelY = startY + 140;
+		this.nextStarY = startY + 700;
+		this.nextOrbY = startY + 400;
+		this.nextSpecialY = startY + 300;
+		this.issDone = false;
+
+	}
+
+	_remove( h ) {
+
+		this.group.remove( h.mesh );
+		if ( h.line ) this.group.remove( h.line );
+		if ( h.trail ) this.group.remove( h.trail );
 
 	}
 
 	// ---------------------------------------------------------------- spawning
 
-	// view: { halfW, halfH } of the visible gameplay plane around the camera target (m)
-	spawnAhead( player, view, dt ) {
+	// player: local { x, y, vy }, view: { halfW, halfH }, ctx: { h, local, night, hRate, localSpeed }
+	spawnAhead( player, view, ctx ) {
 
 		const ahead = player.y + view.halfH * 1.6 + Math.max( 0, player.vy ) * 1.2;
+		const realAt = ( y ) => ctx.h + ( y - player.y ) * ( ctx.hRate || 1 );
 		let guard = 0;
 		while ( this.nextHazardY < ahead && guard ++ < 8 ) {
 
 			const y = this.nextHazardY;
-			const type = pickType( y, this.rnd );
-			if ( type ) this._spawnHazard( type, y, player, view );
-			this.nextHazardY += this._hazardSpacing( y );
+			const h = realAt( y );
+			const type = pickType( h, zoneAt( h ).id, ctx.night, this.rnd );
+			if ( type ) this._spawnHazard( type, y, player, view, ctx );
+			this.nextHazardY += this._spacing( h, ctx );
 
 		}
 
 		guard = 0;
 		while ( this.nextCoinY < ahead && guard ++ < 8 ) {
 
-			this._spawnCoins( this.nextCoinY, player, view );
-			this.nextCoinY += 34 + this.nextCoinY * 0.035 + this.rnd() * 30;
+			this._spawnCoins( this.nextCoinY, player, view, zoneAt( realAt( this.nextCoinY ) ), ctx );
+			this.nextCoinY += ctx.local ? 40 + this.rnd() * 30 : 34 + this.nextCoinY * 0.035 + this.rnd() * 30;
 
 		}
 
 		guard = 0;
 		while ( this.nextFuelY < ahead && guard ++ < 4 ) {
 
-			this._spawnPickup( 'fuel', this.nextFuelY, player, view );
-			this.nextFuelY += 170 + this.nextFuelY * 0.38 + this.rnd() * 160;
+			this._spawnPickup( 'fuel', this.nextFuelY, player, view, 0, ctx );
+			this.nextFuelY += ctx.local ? 380 + this.rnd() * 300 : 170 + this.nextFuelY * 0.38 + this.rnd() * 160;
 
 		}
 
 		guard = 0;
 		while ( this.nextStarY < ahead && guard ++ < 2 ) {
 
-			this._spawnPickup( 'star', this.nextStarY, player, view );
-			this.nextStarY += 1400 + this.nextStarY * 0.4 + this.rnd() * 900;
+			const z = zoneAt( realAt( this.nextStarY ) );
+			this._spawnPickup( 'star', this.nextStarY, player, view, z.coin * 25, ctx );
+			this.nextStarY += ctx.local ? 900 + this.rnd() * 700 : 1400 + this.nextStarY * 0.4 + this.rnd() * 900;
 
 		}
 
-		void dt;
+		guard = 0;
+		while ( this.nextOrbY < ahead && guard ++ < 2 ) {
+
+			const kinds = [ 'shieldOrb', 'magnetOrb', 'boostOrb' ];
+			this._spawnPickup( kinds[ ( this.rnd() * 3 ) | 0 ], this.nextOrbY, player, view, 0, ctx );
+			this.nextOrbY += ctx.local ? 520 + this.rnd() * 500 : 600 + this.nextOrbY * 0.3 + this.rnd() * 600;
+
+		}
+
+		// high up and in space: stranded astronauts, lost probes, crystals, the space station
+		if ( ctx.local ) {
+
+			guard = 0;
+			while ( this.nextSpecialY < ahead && guard ++ < 2 ) {
+
+				const z = zoneAt( realAt( this.nextSpecialY ) );
+				const roll = this.rnd();
+				const kind = z.space ? ( roll < 0.45 ? 'crystal' : roll < 0.75 ? 'probe' : 'astronaut' ) : roll < 0.6 ? 'astronaut' : 'crystal';
+				this._spawnPickup( kind, this.nextSpecialY, player, view, z.coin * ( kind === 'crystal' ? 12 : 40 ), ctx );
+				this.nextSpecialY += 700 + this.rnd() * 900;
+
+			}
+
+			if ( ! this.issDone && ctx.h > 380000 && ctx.h < 480000 ) {
+
+				this.issDone = true;
+				this._spawnHazard( 'iss', player.y + view.halfH * 1.4, player, view, ctx );
+
+			}
+
+		}
 
 	}
 
-	_hazardSpacing( y ) {
+	_spacing( h, ctx ) {
 
-		// denser near the ground, spreading out as the climb gets faster
-		return ( 38 + y * 0.045 ) * ( 0.6 + this.rnd() * 0.8 );
+		if ( ctx.local ) return ( 55 + ( ctx.localSpeed || 80 ) * 0.5 ) * ( 0.6 + this.rnd() * 0.8 );
+		return ( 38 + h * 0.045 ) * ( 0.6 + this.rnd() * 0.8 );
 
 	}
 
-	_placeX( player, view, y, spread = 0.85 ) {
+	_placeX( player, view, y, spread = 0.85, ctx = null ) {
 
-		// where the player will roughly be when reaching y (drift with the wind)
-		const t = Math.max( 0, ( y - player.y ) / Math.max( 8, player.vy ) );
-		const drift = Math.min( 400, windAt( y ) * Math.min( t, 12 ) * 0.6 );
+		let drift = 0;
+		if ( ! ctx || ! ctx.local ) {
+
+			const t = Math.max( 0, ( y - player.y ) / Math.max( 8, player.vy ) );
+			drift = Math.min( 400, windAt( y ) * Math.min( t, 12 ) * 0.6 );
+
+		}
+
 		return player.x + drift + ( this.rnd() * 2 - 1 ) * view.halfW * spread;
 
 	}
 
-	_spawnHazard( type, y, player, view ) {
+	_spawnHazard( type, y, player, view, ctx ) {
 
 		const M = models(), X = mats(), r = this.rnd;
 		const g = new Group();
-		const h = { type, mesh: g, x: 0, y, vx: 0, vy: 0, t: r() * 10, damage: TYPES[ type ].damage, circles: [], alive: true, warn: false, parts: {} };
+		const t = TYPES[ type ] || { damage: 3 };
+		const item = { type, mesh: g, x: 0, y, vx: 0, vy: 0, t: r() * 10, damage: t.damage, circles: [], alive: true, warn: !! t.warn, parts: {} };
 		const side = r() < 0.5 ? - 1 : 1;
 		const crossX = ( speed ) => {
 
-			h.x = player.x - side * ( view.halfW + 30 + speed * 0.5 );
-			h.vx = side * speed;
+			item.x = player.x - side * ( view.halfW + 30 + speed * 0.5 );
+			item.vx = side * speed;
 
 		};
+
+		const face = ( m ) => {
+
+			m.rotation.y = side > 0 ? 0 : Math.PI;
+			return m;
+
+		};
+
+		const local = { local: true };
 
 		switch ( type ) {
 
@@ -386,26 +278,23 @@ export class Hazards {
 			case 'geese': {
 
 				const n = type === 'gulls' ? 2 + Math.floor( r() * 4 ) : 5 + Math.floor( r() * 4 );
-				const speed = type === 'gulls' ? 9 + r() * 6 : 16 + r() * 8;
-				crossX( speed );
-				h.birds = [];
+				crossX( type === 'gulls' ? 9 + r() * 6 : 16 + r() * 8 );
+				item.birds = [];
 				for ( let i = 0; i < n; i ++ ) {
 
 					const b = new Group();
-					const body = mesh( type === 'gulls' ? M.gullBody : M.gooseBody, X.matte );
 					const wl = mesh( type === 'gulls' ? M.gullWing : M.gooseWing, X.matte );
 					const wr = mesh( type === 'gulls' ? M.gullWing : M.gooseWing, X.matte );
 					wr.scale.set( - 1, 1, 1 );
-					b.add( body, wl, wr );
-					// V formation for geese, loose flock for gulls
+					b.add( mesh( type === 'gulls' ? M.gullBody : M.gooseBody, X.matte ), wl, wr );
 					const ox = type === 'geese' ? - Math.abs( i - n / 2 ) * 3.2 : ( r() - 0.5 ) * 9;
 					const oy = type === 'geese' ? ( i - n / 2 ) * 2.2 : ( r() - 0.5 ) * 7;
 					b.position.set( ox * side, oy, ( r() - 0.5 ) * 4 );
 					b.rotation.y = side > 0 ? Math.PI / 2 : - Math.PI / 2;
 					b.scale.setScalar( type === 'gulls' ? 1.25 : 1.35 );
 					g.add( b );
-					h.birds.push( { g: b, wl, wr, phase: r() * 6, ox: b.position.x, oy } );
-					h.circles.push( { ox: b.position.x, oy, r: 1.6 } );
+					item.birds.push( { g: b, wl, wr, phase: r() * 6, oy } );
+					item.circles.push( { ox: b.position.x, oy, r: 1.6 } );
 
 				}
 
@@ -415,72 +304,100 @@ export class Hazards {
 
 			case 'kite': {
 
-				h.x = this._placeX( player, view, y, 0.7 );
-				h.anchor = { x: h.x - 25 - r() * 30, y: Math.max( 0.5, islandHeight( h.x - 30, 0 ) ) };
+				item.x = this._placeX( player, view, y, 0.7 );
+				item.anchor = { x: item.x - 25 - r() * 30, y: Math.max( 0.5, islandHeight( item.x - 30, 0 ) ) };
 				const k = mesh( M.kite, X.paint );
 				k.scale.setScalar( 1.4 );
 				g.add( k );
-				h.parts.kite = k;
-				h.line = mesh( new ToyBuilder().add( new CylinderGeometry( 0.05, 0.05, 1, 4 ), { color: 0x3b3b44 } ).build(), X.matte, false );
-				this.group.add( h.line );
-				h.circles.push( { ox: 0, oy: 0, r: 1.9 } );
+				item.parts.kite = k;
+				item.line = mesh( new ToyBuilder().add( new CylinderGeometry( 0.05, 0.05, 1, 4 ), { color: 0x3b3b44 } ).build(), X.matte, false );
+				this.group.add( item.line );
+				item.circles.push( { ox: 0, oy: 0, r: 1.9 } );
 				break;
 
 			}
 
-			case 'drone': {
-
-				h.x = this._placeX( player, view, y, 0.9 );
-				h.home = { x: h.x, y };
-				g.add( mesh( M.drone, X.paint ) );
-				g.add( mesh( M.droneLed, X.glow, false ) );
+			case 'drone':
+				item.x = this._placeX( player, view, y, 0.9 );
+				item.home = { x: item.x, y };
+				g.add( mesh( M.drone, X.paint ), mesh( M.droneLed, X.glow, false ) );
 				g.scale.setScalar( 1.4 );
-				h.circles.push( { ox: 0, oy: 0, r: 1.9 } );
+				item.circles.push( { ox: 0, oy: 0, r: 1.9 } );
+				break;
+
+			case 'heli': {
+
+				crossX( 22 + r() * 10 );
+				const body = face( mesh( M.heli, X.paint ) );
+				const rotor = mesh( M.rotor, X.matte );
+				rotor.position.set( 0, 1.75, 0 );
+				body.add( rotor );
+				g.add( body );
+				item.parts.rotor = rotor;
+				item.circles.push( { ox: 0, oy: 0, r: 2.1 }, { ox: - 3.6 * side, oy: 0.3, r: 1 }, { ox: - 3 * side, oy: 1.75, r: 1.5 }, { ox: 3 * side, oy: 1.75, r: 1.5 } );
 				break;
 
 			}
 
-			case 'paraglider': {
+			case 'hangglider': {
 
+				crossX( 11 + r() * 5 );
+				item.vy = - 0.8;
+				const m = mesh( M.hangglider, X.paint );
+				m.rotation.y = side > 0 ? Math.PI / 2 : - Math.PI / 2;
+				g.add( m );
+				item.circles.push( { ox: 0, oy: 0, r: 2.4 }, { ox: 0, oy: - 2.3, r: 0.9 } );
+				break;
+
+			}
+
+			case 'rival':
+				item.x = this._placeX( player, view, y, 0.8 );
+				item.vy = 2 + r() * 3;
+				g.add( mesh( M.rival, X.paint ) );
+				g.scale.setScalar( 1.2 );
+				item.circles.push( { ox: 0, oy: 5.5, r: 3.8 }, { ox: 0, oy: - 0.2, r: 0.9 } );
+				break;
+
+			case 'paraglider':
 				crossX( 6 + r() * 4 );
-				h.vy = - 1.2;
-				const p = mesh( M.paraglider, X.paint );
-				p.rotation.y = side > 0 ? 0 : Math.PI;
-				g.add( p );
-				h.circles.push( { ox: 0, oy: - 1.2, r: 3.6 }, { ox: - 3.2, oy: - 2.2, r: 1.8 }, { ox: 3.2, oy: - 2.2, r: 1.8 }, { ox: 0, oy: - 7.2, r: 1.0 } );
+				item.vy = - 1.2;
+				g.add( face( mesh( M.paraglider, X.paint ) ) );
+				item.circles.push( { ox: 0, oy: - 1.2, r: 3.6 }, { ox: - 3.2, oy: - 2.2, r: 1.8 }, { ox: 3.2, oy: - 2.2, r: 1.8 }, { ox: 0, oy: - 7.2, r: 1.0 } );
 				break;
-
-			}
 
 			case 'seaplane': {
 
 				crossX( 38 + r() * 14 );
-				const p = mesh( M.seaplane, X.paint );
+				const p = face( mesh( M.seaplane, X.paint ) );
 				const prop = mesh( M.prop, X.matte );
 				prop.position.set( 4.75, 0, 0 );
 				p.add( prop );
-				p.rotation.y = side > 0 ? 0 : Math.PI;
 				g.add( p );
-				h.parts.prop = prop;
-				h.warn = true;
-				h.circles.push( { ox: 0, oy: 0, r: 2.2 }, { ox: 2.8 * side, oy: 0, r: 1.6 }, { ox: - 3 * side, oy: 0.6, r: 1.5 }, { ox: 1.2 * side, oy: 0.8, r: 1.2 }, { ox: 1.0 * side, oy: - 1.6, r: 1.1 } );
+				item.parts.prop = prop;
+				item.circles.push( { ox: 0, oy: 0, r: 2.2 }, { ox: 2.8 * side, oy: 0, r: 1.6 }, { ox: - 3 * side, oy: 0.6, r: 1.5 }, { ox: 1.2 * side, oy: 0.8, r: 1.2 }, { ox: 1.0 * side, oy: - 1.6, r: 1.1 } );
 				break;
 
 			}
 
+			case 'blimp':
+				crossX( 5 + r() * 3 );
+				g.add( face( mesh( M.blimp, X.paint ) ) );
+				for ( let i = - 2; i <= 2; i ++ ) item.circles.push( { ox: i * 5.5, oy: 0, r: 4.6 - Math.abs( i ) * 0.8 } );
+				break;
+
 			case 'storm': {
 
-				h.x = this._placeX( player, view, y, 0.7 );
-				const c = mesh( M.storm, X.cloud );
-				g.add( c );
+				item.x = this._placeX( player, view, y, 0.7 );
+				g.add( mesh( M.storm, X.cloud ) );
 				g.scale.setScalar( 1.2 + r() * 0.5 );
 				const bolt = mesh( M.bolt, X.bolt, false );
 				bolt.position.set( 0, - 4, 3 );
 				bolt.visible = false;
 				g.add( bolt );
-				h.parts.bolt = bolt;
-				h.strike = 2 + r() * 2.5;
-				h.circles.push( { ox: 0, oy: 0, r: 0, off: true } );
+				item.parts.bolt = bolt;
+				item.strike = 2 + r() * 2.5;
+				item.circles.push( { ox: 0, oy: 0, r: 0, off: true } );
 				break;
 
 			}
@@ -488,88 +405,228 @@ export class Hazards {
 			case 'airliner': {
 
 				crossX( 150 + r() * 60 );
-				const a = mesh( M.airliner, X.paint );
-				a.rotation.y = side > 0 ? 0 : Math.PI;
-				g.add( a );
+				g.add( face( mesh( M.airliner, X.paint ) ) );
 				const trail = mesh( M.contrail, X.trail, false );
 				trail.layers.set( 2 );
 				this.group.add( trail );
-				h.trail = trail;
-				h.warn = true;
-				for ( let i = - 3; i <= 3; i ++ ) h.circles.push( { ox: i * 5 * side, oy: 0, r: 2.6 } );
-				h.circles.push( { ox: 1 * side, oy: - 0.8, r: 3.5 }, { ox: - 18 * side, oy: 4, r: 2.5 } );
+				item.trail = trail;
+				for ( let i = - 3; i <= 3; i ++ ) item.circles.push( { ox: i * 5 * side, oy: 0, r: 2.6 } );
+				item.circles.push( { ox: 1 * side, oy: - 0.8, r: 3.5 }, { ox: - 18 * side, oy: 4, r: 2.5 } );
 				break;
 
 			}
 
-			case 'weather': {
-
-				h.x = this._placeX( player, view, y, 0.8 );
-				h.vy = 4 + r() * 3;
+			case 'weather':
+				item.x = this._placeX( player, view, y, 0.8, ctx );
+				item.vy = ctx.local ? 0 : 4 + r() * 3;
 				g.add( mesh( M.weather, X.paint ) );
-				h.circles.push( { ox: 0, oy: 0, r: 3.4 }, { ox: 0, oy: - 9.5, r: 0.8 } );
+				item.circles.push( { ox: 0, oy: 0, r: 3.4 }, { ox: 0, oy: - 9.5, r: 0.8 } );
+				break;
+
+			case 'jet':
+				crossX( 260 + r() * 80 );
+				g.add( face( mesh( M.jet, X.metal ) ) );
+				item.circles.push( { ox: 0, oy: 0, r: 1.6 }, { ox: 5 * side, oy: 0, r: 1.2 }, { ox: - 3 * side, oy: 0, r: 2.8 } );
+				break;
+
+			case 'ufo':
+			case 'spaceufo': {
+
+				crossX( 30 + r() * 25 );
+				g.add( mesh( M.ufo, X.metal ) );
+				const lights = mesh( M.ufoLights, X.glow, false );
+				g.add( lights );
+				item.wobble = r() * 6;
+				item.circles.push( { ox: 0, oy: 0, r: 3.6 } );
 				break;
 
 			}
 
-			case 'jet': {
+			case 'meteor': {
 
-				crossX( 260 + r() * 80 );
-				const j = mesh( M.jet, X.metal );
-				j.rotation.y = side > 0 ? 0 : Math.PI;
-				g.add( j );
-				h.warn = true;
-				h.circles.push( { ox: 0, oy: 0, r: 1.6 }, { ox: 5 * side, oy: 0, r: 1.2 }, { ox: - 3 * side, oy: 0, r: 2.8 } );
+				item.x = player.x + ( r() * 2 - 1 ) * view.halfW * 1.2;
+				item.vx = ( r() - 0.5 ) * 30;
+				item.vy = - 40 - r() * 40;
+				const m = mesh( M.meteor, X.matte );
+				m.scale.setScalar( 1 + r() * 1.2 );
+				g.add( m );
+				item.spin = ( r() - 0.5 ) * 4;
+				item.circles.push( { ox: 0, oy: 0, r: 1.7 * m.scale.x } );
+				break;
+
+			}
+
+			case 'satellite':
+				crossX( 12 + r() * 14 );
+				g.add( mesh( M.satellite, X.paint ) );
+				item.spin = ( r() - 0.5 ) * 0.6;
+				item.circles.push( { ox: 0, oy: 0, r: 1.6 }, { ox: - 4.2, oy: 0, r: 1.2 }, { ox: 4.2, oy: 0, r: 1.2 }, { ox: - 7.2, oy: 0, r: 1.2 }, { ox: 7.2, oy: 0, r: 1.2 } );
+				break;
+
+			case 'debris':
+			case 'spacedebris': {
+
+				item.x = this._placeX( player, view, y, 1.0, local );
+				item.vx = ( r() - 0.5 ) * 14;
+				item.vy = ( r() - 0.5 ) * 6;
+				const n = 1 + Math.floor( r() * 3 );
+				for ( let i = 0; i < n; i ++ ) {
+
+					const d = mesh( M.debris[ ( r() * 3 ) | 0 ], X.paint );
+					d.position.set( ( r() - 0.5 ) * 6, ( r() - 0.5 ) * 6, ( r() - 0.5 ) * 3 );
+					d.rotation.set( r() * 6, r() * 6, r() * 6 );
+					g.add( d );
+					item.circles.push( { ox: d.position.x, oy: d.position.y, r: 1.2 } );
+
+				}
+
+				item.tumble = [ ( r() - 0.5 ) * 2, ( r() - 0.5 ) * 2 ];
+				break;
+
+			}
+
+			case 'iss':
+				crossX( 18 );
+				g.add( mesh( M.iss, X.paint ) );
+				item.warn = true;
+				for ( let i = - 5; i <= 5; i ++ ) item.circles.push( { ox: i * 5.5, oy: 0, r: 1.2 } );
+				item.circles.push( { ox: 0, oy: - 2.6, r: 2.4 } );
+				break;
+
+			case 'asteroid': {
+
+				item.x = this._placeX( player, view, y, 1.0, local );
+				item.vx = ( r() - 0.5 ) * 10;
+				item.vy = - r() * 8;
+				const k = ( r() * 3 ) | 0;
+				const m = mesh( M.asteroids[ k ], X.matte );
+				const s = 0.8 + r() * 1.2;
+				m.scale.setScalar( s );
+				g.add( m );
+				item.spin = ( r() - 0.5 ) * 1.2;
+				item.circles.push( { ox: 0, oy: 0, r: ( 3 + k * 1.5 ) * s * 0.85 } );
+				break;
+
+			}
+
+			case 'ice': {
+
+				crossX( 8 + r() * 10 );
+				const n = 4 + Math.floor( r() * 5 );
+				for ( let i = 0; i < n; i ++ ) {
+
+					const m = mesh( M.ice, X.paint );
+					const s = 0.6 + r() * 1.2;
+					m.scale.setScalar( s );
+					m.position.set( ( r() - 0.5 ) * 30, ( r() - 0.5 ) * 8, ( r() - 0.5 ) * 4 );
+					m.rotation.set( r() * 6, r() * 6, 0 );
+					g.add( m );
+					item.circles.push( { ox: m.position.x, oy: m.position.y, r: 1.6 * s } );
+
+				}
+
+				break;
+
+			}
+
+			case 'comet':
+				crossX( 55 + r() * 30 );
+				item.vy = - 10 - r() * 10;
+				g.add( mesh( M.comet, X.paint ) );
+				item.circles.push( { ox: 0, oy: 0, r: 3 } );
+				break;
+
+			case 'whale': {
+
+				crossX( 7 + r() * 4 );
+				const m = face( mesh( M.whale, X.paint ) );
+				g.add( m );
+				item.parts.whale = m;
+				for ( let i = - 2; i <= 2; i ++ ) item.circles.push( { ox: i * 5 * side, oy: 0, r: 4.5 - Math.abs( i ) * 0.6 } );
+				break;
+
+			}
+
+			case 'flare': {
+
+				// a looping prominence arching over the path, dangerous while it pulses bright
+				item.x = this._placeX( player, view, y, 0.6, local );
+				const arc = mesh( M.flare, X.plasma.clone(), false );
+				arc.layers.set( 2 );
+				arc.rotation.z = ( r() - 0.5 ) * 0.6;
+				g.add( arc );
+				item.parts.arc = arc;
+				item.pulse = r() * 3;
+				for ( let i = 0; i <= 8; i ++ ) {
+
+					const a = i / 8 * Math.PI;
+					item.circles.push( { ox: Math.cos( a ) * 16, oy: Math.sin( a ) * 16, r: 2.6 } );
+
+				}
+
 				break;
 
 			}
 
 		}
 
-		g.position.set( h.x, h.y, 0 );
+		g.position.set( item.x, item.y, 0 );
 		this.group.add( g );
-		this.items.push( h );
+		this.items.push( item );
 
 	}
 
-	_spawnCoins( y, player, view ) {
+	_spawnCoins( y, player, view, zone, ctx ) {
 
 		const r = this.rnd;
-		const x0 = this._placeX( player, view, y, 0.6 );
-		const value = y < 300 ? 2 : y < 1500 ? 5 : y < 5000 ? 10 : y < 12000 ? 25 : 60;
-		const pattern = Math.floor( r() * 4 );
+		const x0 = this._placeX( player, view, y, 0.6, ctx );
+		const value = zone.coin;
+		const pattern = Math.floor( r() * 5 );
 		const pts = [];
 		if ( pattern === 0 ) for ( let i = 0; i < 5; i ++ ) pts.push( [ 0, i * 3.2 ] );
 		else if ( pattern === 1 ) for ( let i = 0; i < 7; i ++ ) pts.push( [ Math.sin( i / 6 * Math.PI ) * 6 - 3, i * 3 ] );
 		else if ( pattern === 2 ) for ( let i = 0; i < 8; i ++ ) pts.push( [ Math.cos( i / 8 * Math.PI * 2 ) * 5, Math.sin( i / 8 * Math.PI * 2 ) * 5 ] );
-		else for ( let i = 0; i < 6; i ++ ) pts.push( [ ( i - 2.5 ) * 3, Math.abs( i - 2.5 ) * 1.5 ] );
+		else if ( pattern === 3 ) for ( let i = 0; i < 6; i ++ ) pts.push( [ ( i - 2.5 ) * 3, Math.abs( i - 2.5 ) * 1.5 ] );
+		else for ( let i = 0; i < 10; i ++ ) pts.push( [ Math.sin( i * 0.9 ) * 4, i * 2.6 ] );
 		for ( const [ dx, dy ] of pts ) this._addPickup( 'coin', x0 + dx, y + dy, value );
 
 	}
 
-	_spawnPickup( kind, y, player, view ) {
+	_spawnPickup( kind, y, player, view, value, ctx ) {
 
-		this._addPickup( kind, this._placeX( player, view, y, 0.55 ), y, kind === 'star' ? Math.round( 50 + y * 0.05 ) : 0 );
+		this._addPickup( kind, this._placeX( player, view, y, 0.55, ctx ), y, value );
 
 	}
 
 	_addPickup( kind, x, y, value ) {
 
 		const M = models(), X = mats();
-		const m = kind === 'coin' ? mesh( M.coin, X.gold ) : kind === 'fuel' ? mesh( M.fuel, X.paint ) : mesh( M.star, X.star );
-		if ( kind === 'coin' ) m.scale.setScalar( 1.15 );
+		let m;
+		switch ( kind ) {
+
+			case 'coin': m = mesh( M.coin, X.gold ); m.scale.setScalar( 1.15 ); break;
+			case 'fuel': m = mesh( M.fuel, X.paint ); break;
+			case 'star': m = mesh( M.star, X.star ); break;
+			case 'astronaut': m = mesh( M.astronaut, X.paint ); m.scale.setScalar( 1.4 ); break;
+			case 'probe': m = mesh( M.probe, X.paint ); break;
+			case 'crystal': m = mesh( M.crystal, X.crystal ); m.scale.setScalar( 1.3 ); break;
+			default: m = mesh( M.orb, this.orbMats[ kind ], false ); m.layers.set( 2 ); break;
+
+		}
+
 		m.position.set( x, y, 0 );
 		this.group.add( m );
-		this.pickups.push( { kind, x, y, value, mesh: m, t: this.rnd() * 6, r: kind === 'coin' ? 1.3 : 2.0, alive: true } );
+		this.pickups.push( { kind, x, y, value, mesh: m, t: this.rnd() * 6, r: kind === 'coin' ? 1.3 : 2.2, alive: true } );
 
 	}
 
 	// ---------------------------------------------------------------- update
 
-	update( dt, player, view, time ) {
+	update( dt, player, view, time, ctx = {} ) {
 
 		const keepBelow = player.y - view.halfH * 2.5 - 60;
 		const farX = view.halfW * 3.5 + 400;
+		const P = this.particles;
 		for ( const h of this.items ) {
 
 			h.t += dt;
@@ -592,11 +649,9 @@ export class Hazards {
 					const sway = Math.sin( h.t * 0.8 ) * 6 + Math.sin( h.t * 2.1 ) * 1.5;
 					h.x = h.anchor.x + 30 + sway;
 					h.parts.kite.rotation.z = Math.sin( h.t * 1.7 ) * 0.35;
-					// the line from the beach up to the kite
 					const dx = h.x - h.anchor.x, dy = h.y - h.anchor.y;
-					const len = Math.hypot( dx, dy );
 					h.line.position.set( ( h.x + h.anchor.x ) / 2, ( h.y + h.anchor.y ) / 2, - 0.2 );
-					h.line.scale.set( 1, len, 1 );
+					h.line.scale.set( 1, Math.hypot( dx, dy ), 1 );
 					h.line.rotation.set( 0, 0, - Math.atan2( dx, dy ) );
 					break;
 
@@ -607,13 +662,20 @@ export class Hazards {
 					h.y = h.home.y + Math.sin( h.t * 0.9 ) * 4;
 					h.mesh.rotation.set( 0, h.t * 0.3, Math.cos( h.t * 0.5 ) * 0.15 );
 					break;
+				case 'heli':
+					h.parts.rotor.rotation.y = h.t * 30;
+					h.y += Math.sin( h.t * 1.1 ) * 0.04;
+					break;
 				case 'seaplane':
 					h.parts.prop.rotation.x = h.t * 40;
 					h.y += Math.sin( h.t * 0.7 ) * 0.05;
 					break;
+				case 'rival':
+					h.mesh.rotation.y = h.t * 0.2;
+					break;
 				case 'storm': {
 
-					h.x += windAt( h.y, time ) * 0.4 * dt;
+					h.x += windAt( Math.max( 0, ctx.h || 0 ), time ) * 0.4 * dt;
 					h.strike -= dt;
 					const bolt = h.parts.bolt;
 					if ( h.strike <= 0 ) {
@@ -625,7 +687,7 @@ export class Hazards {
 						h.circles[ 0 ].off = false;
 						h.circles[ 0 ].oy = - 18;
 						h.circles[ 0 ].r = 9;
-						h.onStrike && h.onStrike( h );
+						if ( this.onEvent ) this.onEvent( 'thunder', h );
 
 					}
 
@@ -648,7 +710,6 @@ export class Hazards {
 
 				case 'airliner': {
 
-					// contrail stretching behind
 					const len = Math.min( 900, h.t * Math.abs( h.vx ) );
 					const dir = Math.sign( h.vx );
 					h.trail.position.set( h.x - dir * ( 12 + len / 2 ), h.y - 1.9, - 1 );
@@ -661,6 +722,54 @@ export class Hazards {
 				case 'weather':
 					h.mesh.rotation.z = Math.sin( h.t * 0.6 ) * 0.08;
 					break;
+				case 'ufo':
+				case 'spaceufo':
+					h.y += Math.sin( h.t * 2 + h.wobble ) * 0.12;
+					h.mesh.rotation.set( Math.sin( h.t ) * 0.15, h.t * 2, 0 );
+					break;
+				case 'meteor':
+					h.mesh.rotation.x += h.spin * dt;
+					h.mesh.rotation.y += h.spin * dt * 0.7;
+					if ( P && Math.random() < 0.8 ) {
+
+						P.emit( { x: h.x, y: h.y, z: 0, vx: - h.vx * 0.2, vy: - h.vy * 0.1, life: 0.6, size: 2.2, grow: 1.5, color: [ 14, 6, 1.5 ], cool: [ 0.3, 0.3, 0.35 ], drag: 1 } );
+						P.emit( { soft: true, x: h.x, y: h.y + 1, z: 0, life: 1.8, size: 2, grow: 2.5, color: [ 0.2, 0.2, 0.22 ], alpha: 0.6, drag: 0.5 } );
+
+					}
+
+					break;
+				case 'satellite':
+					h.mesh.rotation.z += h.spin * dt;
+					break;
+				case 'debris':
+				case 'spacedebris':
+					h.mesh.rotation.x += h.tumble[ 0 ] * dt;
+					h.mesh.rotation.y += h.tumble[ 1 ] * dt;
+					break;
+				case 'asteroid':
+					h.mesh.rotation.x += h.spin * dt;
+					h.mesh.rotation.z += h.spin * dt * 0.6;
+					break;
+				case 'ice':
+					h.mesh.rotation.z += dt * 0.1;
+					break;
+				case 'comet':
+					h.mesh.rotation.x += dt * 0.5;
+					if ( P ) P.emit( { x: h.x + ( Math.random() - 0.5 ) * 2, y: h.y + ( Math.random() - 0.5 ) * 2, z: - 1, vx: - h.vx * 0.3 + ( Math.random() - 0.5 ) * 3, vy: 6 + Math.random() * 4, life: 2.5, size: 2.5, grow: 3, color: [ 0.6, 1.2, 2.2 ], drag: 0.2, fade: 1.5 } );
+					break;
+				case 'whale':
+					h.parts.whale.rotation.z = Math.sin( h.t * 0.8 ) * 0.1;
+					h.y += Math.sin( h.t * 0.8 ) * 0.08;
+					break;
+				case 'flare': {
+
+					const k = 0.5 + 0.5 * Math.sin( h.t * 1.6 + h.pulse );
+					h.parts.arc.material.set( 'k', 0.25 + k * 0.9 );
+					for ( const c of h.circles ) c.off = k < 0.45;
+					h.parts.arc.scale.setScalar( 0.85 + k * 0.2 );
+					break;
+
+				}
 
 			}
 
@@ -674,16 +783,18 @@ export class Hazards {
 		for ( const p of this.pickups ) {
 
 			p.t += dt;
-			if ( p.kind === 'coin' ) p.mesh.rotation.set( 0, p.t * 3, 0 );
-			else if ( p.kind === 'fuel' ) {
+			switch ( p.kind ) {
 
-				p.y -= 1.2 * dt;
-				p.mesh.rotation.z = Math.sin( p.t * 1.5 ) * 0.15;
-
-			} else {
-
-				p.mesh.rotation.set( p.t, p.t * 1.3, 0 );
-				p.mesh.scale.setScalar( 1 + Math.sin( p.t * 5 ) * 0.12 );
+				case 'coin': p.mesh.rotation.set( 0, p.t * 3, 0 ); break;
+				case 'fuel':
+					if ( ! ctx.local ) p.y -= 1.2 * dt;
+					p.mesh.rotation.z = Math.sin( p.t * 1.5 ) * 0.15;
+					break;
+				case 'astronaut': p.mesh.rotation.set( p.t * 0.4, p.t * 0.7, Math.sin( p.t ) * 0.5 ); break;
+				case 'probe': p.mesh.rotation.set( 0.3, p.t * 0.3, 0.2 ); break;
+				case 'crystal': p.mesh.rotation.set( 0, p.t * 2, 0 ); p.mesh.scale.setScalar( 1.3 + Math.sin( p.t * 4 ) * 0.1 ); break;
+				case 'star': p.mesh.rotation.set( p.t, p.t * 1.3, 0 ); p.mesh.scale.setScalar( 1 + Math.sin( p.t * 5 ) * 0.12 ); break;
+				default: p.mesh.scale.setScalar( 1 + Math.sin( p.t * 6 ) * 0.1 ); break;
 
 			}
 
@@ -696,6 +807,7 @@ export class Hazards {
 
 			p.mesh.position.set( p.x, p.y, 0 );
 			if ( p.y < keepBelow ) p.alive = false;
+			if ( P && Math.random() < ( p.kind === 'coin' ? 0.02 : 0.08 ) ) P.emit( { x: p.x + ( Math.random() - 0.5 ) * 2, y: p.y + ( Math.random() - 0.5 ) * 2, z: 0.5, life: 0.5, size: 0.35, color: p.kind === 'coin' ? [ 6, 4.5, 1 ] : [ 3, 3, 4 ], fade: 1 } );
 
 		}
 
@@ -709,13 +821,7 @@ export class Hazards {
 		for ( const h of this.items ) {
 
 			if ( h.alive ) keep.push( h );
-			else {
-
-				this.group.remove( h.mesh );
-				if ( h.line ) this.group.remove( h.line );
-				if ( h.trail ) this.group.remove( h.trail );
-
-			}
+			else this._remove( h );
 
 		}
 
@@ -732,9 +838,24 @@ export class Hazards {
 
 	}
 
+	// shift everything down by dy (the moving local frame re-centres itself)
+	shift( dy ) {
+
+		for ( const h of this.items ) {
+
+			h.y -= dy;
+			if ( h.home ) h.home.y -= dy;
+			if ( h.anchor ) h.anchor.y -= dy;
+
+		}
+
+		for ( const p of this.pickups ) p.y -= dy;
+		this.nextHazardY -= dy; this.nextCoinY -= dy; this.nextFuelY -= dy; this.nextStarY -= dy; this.nextOrbY -= dy; this.nextSpecialY -= dy;
+
+	}
+
 	// ---------------------------------------------------------------- collisions
 
-	// circles: world-space [ { x, y, r } ] of the player. Returns the first hazard hit (or null).
 	hitTest( circles ) {
 
 		for ( const h of this.items ) {
@@ -743,7 +864,7 @@ export class Hazards {
 			for ( const c of h.circles ) {
 
 				if ( c.off ) continue;
-				const hx = h.x + c.ox * ( h.mesh.scale.x ), hy = h.y + c.oy * ( h.mesh.scale.y );
+				const hx = h.x + c.ox * h.mesh.scale.x, hy = h.y + c.oy * h.mesh.scale.y;
 				const hr = c.r * h.mesh.scale.x;
 				for ( const p of circles ) {
 
@@ -760,7 +881,6 @@ export class Hazards {
 
 	}
 
-	// pickups within reach (and magnet pull toward `center`)
 	collect( circles, center, magnet ) {
 
 		const got = [];
@@ -801,4 +921,4 @@ export class Hazards {
 
 }
 
-export { MathUtils };
+export { TYPES as HAZARD_TYPES };

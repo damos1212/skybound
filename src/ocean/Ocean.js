@@ -64,6 +64,8 @@ export class Ocean {
 		this.fft = fft;
 		this.params = new UniformBlock( 'OceanSurface', {
 			center: [ 'vec2f', new Vector2() ],
+			// floating origin (x): real x = drawn x + origin
+			origin: [ 'f32', 0 ],
 			// displacement fades out between these distances (m)
 			fadeNear: [ 'f32', 600 ],
 			fadeFar: [ 'f32', 2600 ],
@@ -78,10 +80,11 @@ export class Ocean {
 			defines: { IS_WATER: 1 },
 			vertex: /* wgsl */`
 	let local = v.position.xz;
-	let xz = os.center + local;
+	let xzDrawn = os.center + local;
+	let xz = xzDrawn + vec2f( os.origin, 0.0 );
 	let r = length( local );
 	// displacement near the camera: every cascade, the fine ones faded out earlier
-	let camDist = length( vec3f( xz.x - frame.cameraPos.x, frame.cameraPos.y - frame.seaLevel, xz.y - frame.cameraPos.z ) );
+	let camDist = length( vec3f( xzDrawn.x - frame.cameraPos.x, frame.cameraPos.y - frame.seaLevel, xzDrawn.y - frame.cameraPos.z ) );
 	let fade = 1.0 - smoothstep( os.fadeNear, os.fadeFar, camDist );
 	var d = vec3f( 0.0 );
 	var foam = 0.0;
@@ -102,7 +105,7 @@ export class Ocean {
 	// planet curvature: the sea drops away from under the camera
 	let drop = r * r / ${ ( 2 * EARTH_R ).toFixed( 1 ) };
 	v.useWorld = true;
-	v.worldPos = vec3f( xz.x + d.x, frame.seaLevel + d.y - drop, xz.y + d.z );
+	v.worldPos = vec3f( xzDrawn.x + d.x, frame.seaLevel + d.y - drop, xzDrawn.y + d.z );
 	v.worldNormal = vec3f( 0.0, 1.0, 0.0 );
 	o.vDisp = vec4f( xz, foam * fade, depth );
 `,
@@ -157,6 +160,11 @@ export class Ocean {
 	let foam = sat( foamFFT + surf );
 	let foamCol = frame.sunColor * sat( L.y ) * 0.25 + frame.skyIrradiance * PI * 0.9;
 	col = mix( col, foamCol * 0.9, foam );
+	// seen from high up the sea becomes the planet: blend into the sky's ground shading (the same
+	// function renders the Earth past the edge of this mesh and from orbit)
+	let camAlt = frame.cameraPos.y - frame.seaLevel;
+	let planetK = smoothstep( 6000.0, 30000.0, camAlt );
+	if ( planetK > 0.0 && skyGroundHit( -V ) > 0.0 ) { col = mix( col, skyGroundRadiance( -V ), planetK ); }
 	s.albedo = vec3f( 0.0 );
 	s.emissive = col;
 `,
@@ -169,11 +177,13 @@ export class Ocean {
 
 	}
 
-	update( camera ) {
+	update( camera, originX = 0 ) {
 
-		// snap the grid centre so vertices don't swim as the camera drifts
+		// snap the grid centre (in real coordinates) so vertices don't swim as the camera drifts
 		const snap = Math.max( 1, Math.pow( 2, Math.floor( Math.log2( Math.max( camera.position.y, 8 ) / 8 ) ) ) );
-		this.params.fields.center.value.set( Math.round( camera.position.x / snap ) * snap, Math.round( camera.position.z / snap ) * snap );
+		const rx = camera.position.x + originX;
+		this.params.fields.center.value.set( Math.round( rx / snap ) * snap - originX, Math.round( camera.position.z / snap ) * snap );
+		this.params.fields.origin.value = originX;
 
 	}
 

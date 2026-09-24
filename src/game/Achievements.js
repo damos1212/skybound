@@ -1,0 +1,58 @@
+// Achievements: checked on game events (zone reached, run ended, pickups, hits, purchases). Each has a
+// cash reward. `test( save, run )` sees the save (with its lifetime `stats`) and the current run.
+
+const zone = ( id, name, desc, reward ) => ( { id: 'zone_' + id, name, desc, reward, test: ( s ) => s.zones.includes( id ) } );
+const stat = ( id, name, desc, key, n, reward ) => ( { id, name, desc, reward, test: ( s ) => ( s.stats[ key ] || 0 ) >= n } );
+
+export const ACHIEVEMENTS = [
+	{ id: 'first_flight', name: 'First Flight', desc: 'Complete your first run', reward: 50, test: ( s ) => s.stats.runs >= 1 },
+	{ id: 'hundred', name: 'Up, Up', desc: 'Climb 100 m', reward: 50, test: ( s ) => s.best >= 100 },
+	zone( 'low', 'Above the Gulls', 'Reach the Low Skies', 150 ),
+	zone( 'clouds', 'Head in the Clouds', 'Reach the Cloud Deck', 400 ),
+	zone( 'high', 'Cruising Altitude', 'Reach the High Skies', 1000 ),
+	zone( 'strato', 'Blue Turns Black', 'Reach the Stratosphere', 3000 ),
+	zone( 'meso', 'Edge of the World', 'Reach the Edge of Space', 8000 ),
+	zone( 'leo', 'In Orbit', 'Reach Low Orbit', 20000 ),
+	zone( 'meo', 'Navigator', 'Reach High Orbit', 40000 ),
+	zone( 'moon', 'One Small Step', 'Reach the Moon', 100000 ),
+	zone( 'mars', 'Red Planet', 'Reach Mars', 200000 ),
+	zone( 'sun', 'Icarus', 'Fly past the Sun', 350000 ),
+	zone( 'jupiter', 'King of Planets', 'Reach Jupiter', 500000 ),
+	zone( 'saturn', 'Lord of the Rings', 'Reach Saturn', 700000 ),
+	zone( 'neptune', 'Ice Giant', 'Reach Neptune', 1000000 ),
+	zone( 'kuiper', 'Frontier', 'Reach the Kuiper Belt', 1500000 ),
+	zone( 'interstellar', 'Between the Stars', 'Reach interstellar space', 3000000 ),
+	zone( 'blackhole', 'Event Horizon', 'Reach the centre of the galaxy', 10000000 ),
+	stat( 'coins_100', 'Pocket Change', 'Collect 100 coins', 'coins', 100, 100 ),
+	stat( 'coins_1000', 'Piggy Bank', 'Collect 1,000 coins', 'coins', 1000, 1500 ),
+	stat( 'coins_10000', 'Dragon Hoard', 'Collect 10,000 coins', 'coins', 10000, 40000 ),
+	stat( 'runs_10', 'Frequent Flyer', 'Fly 10 runs', 'runs', 10, 300 ),
+	stat( 'runs_50', 'Dedicated', 'Fly 50 runs', 'runs', 50, 5000 ),
+	stat( 'runs_150', 'Lifer', 'Fly 150 runs', 'runs', 150, 50000 ),
+	stat( 'splash_10', 'Frequent Swimmer', 'Splash down 10 times', 'splashes', 10, 250 ),
+	stat( 'pop_1', 'Pop Goes the Balloon', 'Get popped', 'pops', 1, 100 ),
+	stat( 'zap_1', 'Lightning Rod', 'Get struck by lightning', 'zaps', 1, 200 ),
+	stat( 'shield_10', 'Bubble Wrap', 'Block 10 hits with a bubble', 'blocked', 10, 3000 ),
+	stat( 'orbs_20', 'Power Up', 'Collect 20 power orbs', 'orbs', 20, 2000 ),
+	stat( 'stars_10', 'Lucky Star', 'Collect 10 lucky stars', 'stars', 10, 2500 ),
+	stat( 'astro_5', 'Rescue Ranger', 'Rescue 5 stranded astronauts', 'astronauts', 5, 60000 ),
+	stat( 'probe_1', 'Voyager', 'Recover a lost probe', 'probes', 1, 50000 ),
+	stat( 'crystal_10', 'Shiny', 'Collect 10 space crystals', 'crystals', 10, 80000 ),
+	stat( 'bags_20', 'Ballast Master', 'Drop 20 sandbags', 'bags', 20, 800 ),
+	{ id: 'untouchable', name: 'Untouchable', desc: 'Climb past 1 km without a scratch', reward: 800, test: ( s, r ) => !! r && r.hits === 0 && r.maxH >= 1000 },
+	{ id: 'untouchable_space', name: 'Flawless Flight', desc: 'Reach Mars without taking a hit', reward: 150000, test: ( s, r ) => !! r && r.hits === 0 && r.zones.includes( 'mars' ) },
+	{ id: 'night_owl', name: 'Night Owl', desc: 'Fly a run at night', reward: 500, test: ( s ) => ( s.stats.nightRuns || 0 ) >= 1 },
+	{ id: 'all_times', name: 'Around the Clock', desc: 'Fly at every time of day', reward: 2000, test: ( s ) => ( s.stats.times || [] ).length >= 5 },
+	{ id: 'rocketeer', name: 'Rocketeer', desc: 'Unlock the rocket', reward: 5000, test: ( s ) => s.unlocked.includes( 'rocket' ) },
+	{ id: 'starfarer', name: 'Starfarer', desc: 'Unlock the Starship', reward: 50000, test: ( s ) => s.unlocked.includes( 'starship' ) },
+	{ id: 'mach', name: 'Supersonic', desc: 'Go faster than sound', reward: 3000, test: ( s ) => ( s.stats.maxSpeed || 0 ) > 343 },
+	{ id: 'escape', name: 'Escape Velocity', desc: 'Go faster than 11.2 km/s', reward: 30000, test: ( s ) => ( s.stats.maxSpeed || 0 ) > 11200 },
+	{ id: 'ftl', name: 'Faster Than Light', desc: 'Outrun a sunbeam', reward: 300000, test: ( s ) => ( s.stats.maxSpeed || 0 ) > 299792458 },
+	{ id: 'millionaire', name: 'Millionaire', desc: 'Earn $1,000,000 in total', reward: 100000, test: ( s ) => ( s.stats.earned || 0 ) >= 1e6 },
+	{ id: 'fully_loaded', name: 'Fully Loaded', desc: 'Max out every balloon upgrade', reward: 5000, test: ( s, r, ctx ) => !! ctx && ctx.maxed && ctx.maxed.balloon },
+	{ id: 'rocket_maxed', name: 'Heavy Lift', desc: 'Max out every rocket upgrade', reward: 80000, test: ( s, r, ctx ) => !! ctx && ctx.maxed && ctx.maxed.rocket },
+	{ id: 'ship_maxed', name: 'Flagship', desc: 'Max out every Starship upgrade', reward: 2000000, test: ( s, r, ctx ) => !! ctx && ctx.maxed && ctx.maxed.starship },
+	{ id: 'sunscreen', name: 'Sunscreen', desc: 'Pass the Sun without overheating', reward: 250000, test: ( s, r ) => !! r && r.zones.includes( 'jupiter' ) && ! r.overheated },
+];
+
+export const ACHIEVEMENT_BY_ID = Object.fromEntries( ACHIEVEMENTS.map( ( a ) => [ a.id, a ] ) );

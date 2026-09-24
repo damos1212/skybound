@@ -19,6 +19,8 @@ const ISLAND = {
 };
 
 export const LAUNCH = { x: 0, deckY: 3.2, z: 0 };
+// the rocket / starship launch barge, anchored in deeper water east of the beach
+export const BARGE = { x: 150, deckY: 3.3, z: 0 };
 
 // ---- height function (keep in sync with ISLAND_WGSL)
 export function islandHeight( x, z ) {
@@ -263,6 +265,55 @@ function rock( b, x, z, s, r ) {
 
 }
 
+// a sea-going launch platform: grey deck, hazard stripes, a mount, a red lattice gantry and lamps
+function barge() {
+
+	const b = new ToyBuilder();
+	const W = 40, D = 26, H = 3.4;
+	b.add( new BoxGeometry( W, H, D ), { position: [ 0, - H / 2 + 0.6, 0 ], color: 0x3b3f48 } );
+	b.add( new BoxGeometry( W - 1, 0.3, D - 1 ), { position: [ 0, 0.75, 0 ], color: 0x6f7780, jitter: 0.08 } );
+	// hazard stripes along the edges
+	for ( let i = 0; i < 20; i ++ ) {
+
+		b.add( new BoxGeometry( 1.0, 0.32, 0.6 ), { position: [ - W / 2 + 1 + i * 2, 0.78, D / 2 - 0.6 ], color: i % 2 ? 0x1d1d1f : 0xffc93c } );
+		b.add( new BoxGeometry( 1.0, 0.32, 0.6 ), { position: [ - W / 2 + 1 + i * 2, 0.78, - D / 2 + 0.6 ], color: i % 2 ? 0x1d1d1f : 0xffc93c } );
+
+	}
+
+	// landing target
+	b.add( new CylinderGeometry( 7, 7, 0.05, 48 ), { position: [ 0, 0.92, 0 ], color: 0xf4efe6 } );
+	b.add( new CylinderGeometry( 6.2, 6.2, 0.06, 48 ), { position: [ 0, 0.93, 0 ], color: 0x3b3f48 } );
+	b.add( new BoxGeometry( 7, 0.07, 1.2 ), { position: [ 0, 0.95, 0 ], color: 0xf4efe6 } );
+	b.add( new BoxGeometry( 1.2, 0.07, 7 ), { position: [ 0, 0.95, 0 ], color: 0xf4efe6 } );
+	// launch mount (a ring on four legs)
+	for ( const [ x, z ] of [ [ - 2.4, - 2.4 ], [ 2.4, - 2.4 ], [ - 2.4, 2.4 ], [ 2.4, 2.4 ] ] ) b.add( new BoxGeometry( 0.7, 2.0, 0.7 ), { position: [ x, 1.9, z ], color: 0x8f9aa6 } );
+	b.add( new TorusGeometry( 2.6, 0.35, 8, 32 ), { position: [ 0, 2.9, 0 ], rotation: [ Math.PI / 2, 0, 0 ], color: 0xb8c2cc } );
+	// gantry tower: red lattice beside the rocket
+	const gx = - 9, gz = - 4, gh = 34;
+	for ( const [ x, z ] of [ [ - 1.4, - 1.4 ], [ 1.4, - 1.4 ], [ - 1.4, 1.4 ], [ 1.4, 1.4 ] ] ) b.add( new BoxGeometry( 0.35, gh, 0.35 ), { position: [ gx + x, gh / 2 + 0.8, gz + z ], color: 0xd9412f } );
+	for ( let y = 2; y < gh; y += 3 ) {
+
+		b.add( new BoxGeometry( 3.1, 0.25, 0.25 ), { position: [ gx, y, gz - 1.4 ], color: 0xd9412f } );
+		b.add( new BoxGeometry( 3.1, 0.25, 0.25 ), { position: [ gx, y, gz + 1.4 ], color: 0xd9412f } );
+		b.add( new BoxGeometry( 0.25, 0.25, 3.1 ), { position: [ gx - 1.4, y, gz ], color: 0xd9412f } );
+		b.add( new BoxGeometry( 0.25, 0.25, 3.1 ), { position: [ gx + 1.4, y, gz ], color: 0xd9412f } );
+		b.add( new BoxGeometry( 0.2, 4.3, 0.2 ), { position: [ gx, y + 1.5, gz - 1.4 ], rotation: [ 0, 0, 0.78 * ( ( y / 3 ) % 2 ? 1 : - 1 ) ], color: 0xb8352a } );
+
+	}
+
+	// access arms and a crane top
+	for ( const y of [ 12, 22 ] ) b.add( new BoxGeometry( 6, 0.5, 1.2 ), { position: [ gx + 4.2, y, gz + 1.5 ], color: 0x8f9aa6 } );
+	b.add( new BoxGeometry( 10, 0.6, 0.6 ), { position: [ gx + 3, gh + 1.2, gz ], color: 0xffc93c } );
+	b.add( new CylinderGeometry( 0.5, 0.5, 1.2, 12 ), { position: [ gx, gh + 1.7, gz ], color: 0x2b2f36 } );
+	// deck clutter: containers, a fuel sphere
+	b.add( new BoxGeometry( 6, 2.6, 2.4 ), { position: [ 12, 2.1, - 8 ], color: 0x2f6fde } );
+	b.add( new BoxGeometry( 6, 2.6, 2.4 ), { position: [ 12, 2.1, - 5.2 ], color: 0xff5a36 } );
+	b.add( new SphereGeometry( 3, 18, 12 ), { position: [ 13, 4, 7 ], color: 0xf4efe6 } );
+	for ( const [ x, z ] of [ [ 11, 5 ], [ 15, 5 ], [ 11, 9 ], [ 15, 9 ] ] ) b.add( new BoxGeometry( 0.4, 2.4, 0.4 ), { position: [ x, 1.9, z ], color: 0x8f9aa6 } );
+	return b.build();
+
+}
+
 export class Island {
 
 	constructor( scene ) {
@@ -320,9 +371,31 @@ export class Island {
 		this.sock.castShadow = true;
 		this.group.add( this.sock );
 
+		// the launch barge for rockets and starships
+		this.barge = new Mesh( barge(), mats.matte );
+		this.barge.position.set( BARGE.x, 0, BARGE.z );
+		this.barge.castShadow = true;
+		this.barge.receiveShadow = true;
+		this.group.add( this.barge );
+		// floodlight heads (emissive)
+		const lamps = new ToyBuilder();
+		for ( const [ x, z ] of [ [ - 18, - 11 ], [ 18, - 11 ], [ - 18, 11 ], [ 18, 11 ] ] ) {
+
+			lamps.add( new BoxGeometry( 0.3, 7, 0.3 ), { position: [ x, 4.3, z ], color: 0x8f9aa6 } );
+			lamps.add( new BoxGeometry( 1.4, 0.8, 0.5 ), { position: [ x, 8.1, z ], color: 0xfff1c0 } );
+
+		}
+
+		this.bargeLamps = new Mesh( lamps.build(), mats.glow );
+		this.barge.add( this.bargeLamps );
+
 	}
 
 	update( dt, time, wind ) {
+
+		// the barge rides the swell
+		this.barge.position.y = Math.sin( time * 0.7 ) * 0.25;
+		this.barge.rotation.set( Math.sin( time * 0.5 ) * 0.012, 0, Math.sin( time * 0.63 + 1 ) * 0.01 );
 
 		// the windsock points downwind and flutters
 		const a = Math.atan2( wind.x, 0.4 );

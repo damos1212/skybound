@@ -673,7 +673,16 @@ fn cloudsComposite( dir: vec3f, screenUv: vec2f, sceneDist: f32 ) -> vec4f {
 	let z = dot( dir, cloudsParams.viewFwd );
 	let uv = vec2f( x / max( z, 1e-4 ) / cloudsParams.viewTan.x * 0.5 + 0.5, 0.5 - y / max( z, 1e-4 ) / cloudsParams.viewTan.y * 0.5 );
 	let v = max( textureSampleLevel( cloudsView, smpLinearClamp, uv, 0.0 ), vec4f( 0.0 ) );
-	let depthM = textureSampleLevel( cloudsViewMeta, smpLinearClamp, uv, 0.0 ).x * 1000.0;
+	// the nearest cloud depth of the 2x2 texels around uv: filtering between a cloud and empty sky
+	// (depth = far) must not push a cloud's edge behind the scene
+	let msz = vec2f( textureDimensions( cloudsViewMeta ) );
+	let mp = vec2i( floor( uv * msz - 0.5 ) );
+	let mx = vec2i( msz ) - 1;
+	var depthM = 1e9;
+	for ( var k = 0; k < 4; k++ ) {
+		let q = clamp( mp + vec2i( k & 1, k >> 1u ), vec2i( 0 ), mx );
+		depthM = min( depthM, textureLoad( cloudsViewMeta, q, 0 ).x * 1000.0 );
+	}
 	// soft depth test (the weighted cloud depth is an average along the ray)
 	let k = smoothstep( depthM * 0.85, depthM * 1.15, sceneDist );
 	return vec4f( v.rgb * k, 1.0 - min( v.a, 1.0 ) * k );
@@ -951,7 +960,8 @@ ${ MAIN } {
 
 	}
 
-	update( dt, camera ) {
+	// originY: the floating origin (the scene is shifted down by it; the clouds need the real altitude)
+	update( dt, camera, originY = 0, originX = 0 ) {
 
 		const q = QUALITY, P = PRESET, F = this.F, S = this.S;
 		dt = Math.min( 0.1, Math.max( 0, dt ) );
@@ -993,7 +1003,7 @@ ${ MAIN } {
 		// ---- camera
 		camera.updateMatrixWorld();
 		const e = camera.matrixWorld.elements;
-		const cp = camera.position;
+		const cp = { x: camera.position.x + originX, y: camera.position.y + originY, z: camera.position.z };
 		const tanY = Math.tan( MathUtils.degToRad( camera.fov * 0.5 ) ) / ( camera.zoom || 1 );
 		const aspect = camera.aspect;
 		const right = [ e[ 0 ], e[ 1 ], e[ 2 ] ], up = [ e[ 4 ], e[ 5 ], e[ 6 ] ], fwd = [ - e[ 8 ], - e[ 9 ], - e[ 10 ] ];

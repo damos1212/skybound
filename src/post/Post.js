@@ -125,8 +125,8 @@ export class Post {
 // optical depth of exponential height fog between the camera and P
 fn fogOpticalDepth( P: vec3f, d: f32 ) -> f32 {
 	let H = post.fogHeight;
-	let h0 = max( frame.cameraPos.y, 0.0 );
-	let h1 = max( P.y, 0.0 );
+	let h0 = max( frame.cameraPos.y - frame.seaLevel, 0.0 );
+	let h1 = max( P.y - frame.seaLevel, 0.0 );
 	let dh = h1 - h0;
 	let e0 = exp( - h0 / H );
 	var k = e0;

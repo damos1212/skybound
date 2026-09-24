@@ -5,7 +5,7 @@ import { SunShadows } from './engine/render/Shadows.js';
 import { SceneRenderer, LAYERS } from './engine/render/SceneRenderer.js';
 import { FrameUniforms, G } from './engine/render/Frame.js';
 
-import { Atmosphere, SUN_ILLUMINANCE } from './sky/Atmosphere.js';
+import { Atmosphere, SUN_ILLUMINANCE, SUN_ANGULAR_RADIUS } from './sky/Atmosphere.js';
 import { Sky } from './sky/Sky.js';
 import { Clouds } from './sky/Clouds.js';
 import { Environment } from './sky/Environment.js';
@@ -13,9 +13,28 @@ import { OceanFFT } from './ocean/OceanFFT.js';
 import { Ocean } from './ocean/Ocean.js';
 import { Island } from './world/Island.js';
 import { Post } from './post/Post.js';
+import { Particles } from './fx/Particles.js';
 
-// Owns the renderer and the world systems (sky, clouds, sea, island) and runs the frame. The game
-// (src/game) drives the camera and adds its objects to `scene`; App renders whatever is there.
+// Owns the renderer and the world systems (sky, clouds, sea, island, particles) and runs the frame.
+// The game (src/game) drives the camera and adds its objects to `scene`.
+//
+// Floating origin: `originX` / `originY` (m) are added to scene coordinates to get real ones. The game
+// lets its vehicles lag behind their real position when they go faster than the camera can follow
+// (the obstacles then come at a dodgeable pace); the sky, clouds, sea and fog use the real position
+// and the island is drawn shifted.
+//
+// Space: `space` (set by the game each frame, or null) overrides the sun (direction, size, glow,
+// brightness), hands the sky its backdrop bodies and fades the atmosphere out in deep space.
+
+export const TIMES_OF_DAY = {
+	dawn: { name: 'Dawn', elevation: 5, azimuth: 68, bonus: 1.1 },
+	morning: { name: 'Morning', elevation: 32, azimuth: 40, bonus: 1.0 },
+	afternoon: { name: 'Afternoon', elevation: 24, azimuth: - 52, bonus: 1.0 },
+	sunset: { name: 'Sunset', elevation: 3, azimuth: - 64, bonus: 1.1 },
+	night: { name: 'Night', elevation: - 24, azimuth: - 40, bonus: 1.25 },
+};
+
+const _v = new Vector3();
 
 export class App {
 
@@ -25,12 +44,15 @@ export class App {
 		this.settings = {
 			exposure: 0.62,
 			renderScale: 1,
-			quality: this.qs.get( 'quality' ) || 'high',
+			quality: this.qs.get( 'quality' ) || localStorage.getItem( 'skybound.quality' ) || 'high',
 		};
-		// sun: late afternoon, ahead and to the left of the camera (which looks toward -z)
-		this.sun = { elevation: 24, azimuth: - 52 };
-		this.cameraAltitude = 0;
-		this.onFrame = null;
+		this.timeOfDay = 'afternoon';
+		this.sun = { ...TIMES_OF_DAY.afternoon };
+		this.originY = 0;
+		this.originX = 0;
+		this.space = null;
+		this.worldVisible = true;
+		this.cloudsEnabled = true;
 
 	}
 
@@ -53,6 +75,7 @@ export class App {
 		camera.updateProjectionMatrix();
 		this.scene = scene;
 		this.camera = camera;
+		if ( this.settings.quality === 'low' ) engine.setRenderScale( 0.75 );
 
 		await progress( 0.15, 'Mixing the atmosphere' );
 		this.atmosphere = new Atmosphere( engine );
@@ -65,7 +88,7 @@ export class App {
 
 		}
 
-		this.shadows = new SunShadows( { size: 2048, splits: [ 45, 180, 700 ], lightMargin: 400, normalBias: [ 0.04, 0.12, 0.4 ], bias: 0.00003 } );
+		this.shadows = new SunShadows( { size: this.settings.quality === 'low' ? 1024 : 2048, splits: [ 45, 180, 700 ], lightMargin: 400, normalBias: [ 0.04, 0.12, 0.4 ], bias: 0.00003 } );
 		this.shadows.layerMask = ( 1 << LAYERS.OPAQUE ) | ( 1 << LAYERS.TRANSPARENT );
 		this.environment = new Environment( engine, scene, this.sky );
 		this.environment.interval = 1.0;
@@ -77,6 +100,7 @@ export class App {
 		this.fft = new OceanFFT( engine, { cascades: 4 } );
 		this.ocean = new Ocean( { fft: this.fft, sky: this.sky } );
 		scene.add( this.ocean.mesh );
+		this.particles = new Particles( scene );
 
 		this.sceneRenderer = new SceneRenderer( engine.meshRenderer, scene, camera );
 		this.sceneRenderer.background = this.sky.background;
@@ -90,7 +114,6 @@ export class App {
 
 	}
 
-	// compile every pipeline behind the loading screen
 	async precompile( onProgress = () => {} ) {
 
 		const mr = this.engine.meshRenderer;
@@ -129,42 +152,101 @@ export class App {
 
 	// ---------------------------------------------------------------- sun / sky
 
+	setTimeOfDay( id ) {
+
+		const t = TIMES_OF_DAY[ id ] || TIMES_OF_DAY.afternoon;
+		this.timeOfDay = id in TIMES_OF_DAY ? id : 'afternoon';
+		this.sun = { ...t };
+		this.environment.update( 0, true );
+		if ( this.clouds ) this.clouds.invalidate();
+
+	}
+
 	sunDirection( out = new Vector3() ) {
 
 		const el = MathUtils.degToRad( this.sun.elevation ), az = MathUtils.degToRad( this.sun.azimuth );
-		// azimuth 0 = straight ahead of the camera (-z), negative = to the left
 		return out.set( Math.sin( az ) * Math.cos( el ), Math.sin( el ), - Math.cos( az ) * Math.cos( el ) ).normalize();
 
 	}
 
 	updateSun() {
 
+		const sp = this.space;
+		const U = this.sky.params.fields;
+		if ( sp ) {
+
+			this.atmosphere.sunDir.value.copy( sp.sunDir );
+			G.sunDir.value.copy( sp.keyDir || sp.sunDir );
+			G.night.value = 0;
+			U.sunRadius.value = sp.sunRadius;
+			U.sunGlow.value.set( sp.sunGlow, sp.sunGlow * 0.3, 0 );
+			return;
+
+		}
+
+		U.sunRadius.value = SUN_ANGULAR_RADIUS;
+		U.sunGlow.value.set( 0, 0, 0 );
 		const dir = this.sunDirection();
 		this.atmosphere.sunDir.value.copy( dir );
-		G.sunDir.value.copy( dir );
-		G.night.value = MathUtils.smoothstep( - dir.y, 0.02, 0.18 );
-		this.sky.starIntensity.value = 0;
+		const night = MathUtils.smoothstep( - dir.y, 0.02, 0.18 );
+		G.night.value = night;
+		const moon = _v.set( - dir.x, Math.abs( dir.y ) * 0.8 + 0.25, - dir.z ).normalize();
+		this.sky.moonDir.value.copy( moon );
+		G.sunDir.value.copy( dir.y > - 0.07 ? dir : moon );
 
 	}
 
 	applyAtmosphereReadback() {
 
 		const a = this.atmosphere;
+		const sp = this.space;
+		if ( sp ) {
+
+			// outside the atmosphere: white sunlight, falling off with the distance to the Sun
+			const k = SUN_ILLUMINANCE * sp.flux;
+			G.sunColor.value.setRGB( k, k * 0.98, k * 0.95 );
+			const earthShine = sp.earthShine || 0;
+			G.skyIrradiance.value.setRGB( 0.004 + earthShine * 0.05, 0.005 + earthShine * 0.07, 0.008 + earthShine * 0.12 );
+			G.horizonColor.value.setRGB( 0.01, 0.012, 0.02 );
+			return;
+
+		}
+
 		if ( ! a.sunTransmittance ) return;
 		const T = a.sunTransmittance;
 		const sunY = a.sunDir.value.y;
+		const sunUp = sunY > - 0.07;
 		const horizonFade = MathUtils.smoothstep( sunY, - 0.03, 0.02 );
-		G.sunColor.value.setRGB( T[ 0 ], T[ 1 ], T[ 2 ] ).multiplyScalar( SUN_ILLUMINANCE * horizonFade );
+		if ( sunUp ) G.sunColor.value.setRGB( T[ 0 ], T[ 1 ], T[ 2 ] ).multiplyScalar( SUN_ILLUMINANCE * horizonFade );
+		else G.sunColor.value.setRGB( 0.6, 0.7, 1.0 ).multiplyScalar( 0.16 * G.night.value );
 		const irr = a.skyIrradiance;
-		G.skyIrradiance.value.setRGB( irr[ 0 ], irr[ 1 ], irr[ 2 ] );
+		const nightAmb = 0.014 * G.night.value;
+		G.skyIrradiance.value.setRGB( irr[ 0 ] + nightAmb * 0.6, irr[ 1 ] + nightAmb * 0.7, irr[ 2 ] + nightAmb );
 		G.horizonColor.value.setRGB( a.horizon[ 0 ], a.horizon[ 1 ], a.horizon[ 2 ] );
 
 	}
 
-	// stars fade in as the sky above goes dark (from ~15 km up)
-	updateStars( altitude ) {
+	updateSkyParams( alt, dt ) {
 
-		this.sky.starIntensity.value = MathUtils.smoothstep( altitude, 12000, 45000 );
+		const U = this.sky.params.fields;
+		// stars: at night, and in daylight once the air is thin
+		const high = MathUtils.smoothstep( alt, 18000, 70000 );
+		U.starsDay.value = this.space ? 1 : high;
+		U.starIntensity.value = this.space ? 1 : Math.max( G.night.value, high );
+		U.cloudMix.value = this.space ? 0 : 1 - MathUtils.smoothstep( alt, 120000, 220000 );
+		U.spaceMix.value = this.space ? this.space.spaceMix : 0;
+		U.planetTime.value += dt;
+		if ( this.space ) {
+
+			this.sky.setBodies( this.space.bodies );
+			U.nebula.value.set( ...( this.space.nebula || [ 0.5, 0.2, 0.7, 0 ] ) );
+
+		} else {
+
+			U.bodyCount.value = 0;
+			U.nebula.value.w = 0;
+
+		}
 
 	}
 
@@ -188,19 +270,37 @@ export class App {
 		G.dt.value = dt;
 		G.time.value += dt;
 		const cam = this.camera;
-		const alt = cam.position.y;
-		this.cameraAltitude = alt;
+		const alt = cam.position.y + this.originY;
+		this.realAltitude = alt;
+		G.seaLevel.value = - this.originY;
 
 		this.updateSun();
-		this.updateStars( alt );
-		this.atmosphere.update( dt, alt );
+		this.updateSkyParams( this.space ? this.space.altitude : alt, dt );
+		this.atmosphere.update( dt, this.space ? this.space.altitude : alt );
 		this.applyAtmosphereReadback();
-		if ( this.clouds ) this.clouds.update( dt, cam );
+		const cloudsOn = this.clouds && this.cloudsEnabled && ! this.space && alt < 260000;
+		if ( cloudsOn ) this.clouds.update( dt, cam, this.originY, this.originX );
+		else if ( this.clouds ) this.clouds.viewValid.value = 0;
 		this.environment.update( dt );
-		this.fft.update( dt );
-		this.ocean.update( cam );
+		// the island and the sea are drawn shifted by the floating origin (gone in deep space)
+		const world = this.worldVisible && ! this.space;
+		this.island.group.position.set( - this.originX, - this.originY, 0 );
+		this.island.group.visible = world && alt < 150000;
+		this.ocean.mesh.visible = world;
+		if ( world ) {
+
+			this.fft.update( dt );
+			this.ocean.update( cam, this.originX );
+
+		}
+
+		this.particles.update( dt, cam );
 
 		G.exposure.value = this.settings.exposure;
+		this.post.params.fogDensity.value = this.space ? 0 : 0.000045;
+		// space: the eye adapts further (the Sun up close, the dark between the planets)
+		this.post.autoExposure.min.value = this.space ? 0.05 : 0.35;
+		this.post.autoExposure.max.value = this.space ? 2.2 : 4;
 		this.post.flare.update( cam, dt );
 		this.post.beginFrame();
 		this.shadows.render( this.scene, this.engine.meshRenderer, this.shadows.update( cam, G.sunDir.value ) );

@@ -384,8 +384,22 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 	let ro = vec3f( 0.0, viewH, 0.0 );
 
 	let tBottom = atmosphereRaySphereNearest( ro, rd, ATMO_RG );
-	let tTop = atmosphereRaySphereNearest( ro, rd, ATMO_RT );
-	let tMax = select( tTop, tBottom, tBottom > 0.0 );
+	// inside the atmosphere: march from the viewer; above it (orbit): from where the ray enters it
+	var tStart = 0.0;
+	var tEnd = 0.0;
+	if ( viewH <= ATMO_RT ) {
+		let tTop = atmosphereRaySphereNearest( ro, rd, ATMO_RT );
+		tEnd = select( tTop, tBottom, tBottom > 0.0 );
+	} else {
+		let b = dot( ro, rd );
+		let disc = b * b - ( viewH - ATMO_RT ) * ( viewH + ATMO_RT );
+		if ( disc > 0.0 && b < 0.0 ) {
+			let sq = sqrt( disc );
+			tStart = max( - b - sq, 0.0 );
+			tEnd = select( - b + sq, tBottom, tBottom > 0.0 );
+		}
+	}
+	let tMax = max( tEnd - tStart, 0.0 );
 	let steps = 32;
 	let cosTheta = dot( rd, sunDir );
 	let rayPhase = ${ f( 3 / ( 16 * Math.PI ) ) } * ( cosTheta * cosTheta + 1.0 );
@@ -404,7 +418,7 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 		let t1 = ( f32( i ) + 1.0 ) / f32( steps );
 		let ta = t0 * t0 * tMax;
 		let tb = t1 * t1 * tMax;
-		let t = mix( ta, tb, 0.3 );
+		let t = mix( ta, tb, 0.3 ) + tStart;
 		let dt = tb - ta;
 		let p = ro + rd * t;
 		let pr = length( p );
@@ -474,7 +488,7 @@ fn main() {
 		// when a parameter changes, not every frame the camera bobs
 		const y = Math.max( 0.5, cameraY + 0.5 );
 		const yq = y < 100 ? Math.round( y / 2 ) * 2 : Math.exp( Math.round( Math.log( y ) / LOG_STEP ) * LOG_STEP );
-		this.viewHeight.value = RG + Math.max( 0.001, yq / 1000 );
+		this.viewHeight.value = RG + Math.min( 60000, Math.max( 0.001, yq / 1000 ) );
 
 		let dirty = false;
 		if ( this.needsStatic ) {
