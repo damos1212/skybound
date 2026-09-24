@@ -13,7 +13,6 @@ const V = {
 	warpship: { reach: 5e16, nohit: 3e16, k: 3, pay: 5e6 },
 	ark: { reach: 3e21, nohit: 2e21, k: 3, pay: 3e8 },
 };
-const SHIP = [ 'starship', 'warpship', 'ark' ];
 
 const TEMPLATES = [
 	{ type: 'reach', weight: 3, make: ( ctx ) => {
@@ -52,13 +51,13 @@ const TEMPLATES = [
 	{ type: 'land', weight: 1, vehicles: [ 'balloon' ], make: () => ( { target: 1, text: 'Land on the island, not in the sea', k: 0.7 } ) },
 	{ type: 'night', weight: 1, make: () => ( { target: 1, text: 'Fly a run at night', k: 0.6 } ) },
 	{ type: 'rescue', weight: 2, vehicles: [ 'rocket', 'starship' ], make: () => ( { target: 1, text: 'Rescue a stranded astronaut', k: 1 } ) },
-	{ type: 'rings', weight: 3, vehicles: SHIP, make: ( ctx ) => {
+	{ type: 'rings', weight: 3, make: ( ctx ) => {
 
 		const n = [ 6, 10, 15, 20, 26 ][ Math.min( 4, ctx.tier ) ];
-		return { target: n, text: `Fly through ${ n } warp rings in one run`, k: 0.9 };
+		return { target: n, text: `Fly through ${ n } ${ [ 'balloon', 'rocket' ].includes( ctx.v ) ? 'sky hoops' : 'warp rings' } in one run`, k: 0.9 };
 
 	} },
-	{ type: 'chains', weight: 2, vehicles: SHIP, make: ( ctx ) => {
+	{ type: 'chains', weight: 2, make: ( ctx ) => {
 
 		const n = Math.min( 4, 1 + Math.floor( ctx.tier / 2 ) );
 		return { target: n, text: n > 1 ? `Complete ${ n } ring chains in one run` : 'Complete a whole ring chain', k: 1 };

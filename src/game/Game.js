@@ -1,4 +1,7 @@
 import { Vector3, MathUtils } from '../engine/math/index.js';
+import { Mesh } from '../engine/scene/Mesh.js';
+import { BoxGeometry } from '../engine/geometry/index.js';
+import { ToyBuilder, toyMaterials } from '../world/Toy.js';
 import { Balloon } from './Balloon.js';
 import { Rocket, ROCKET_LIVERIES } from './Rocket.js';
 import { Starship, SHIP_LIVERIES } from './Starship.js';
@@ -8,7 +11,7 @@ import { Hazards } from './Hazards.js';
 import { Input } from './Input.js';
 import { createState, step, dropBag, windAt, createRocketState, stepRocket, createShipState, stepShip, ORBIT_START, SHIP_START, JUMP_TIME } from './Physics.js';
 import { computeStats, defaultLevels, UPGRADES, VEHICLES, VEHICLE_BY_ID, isShip } from './Upgrades.js';
-import { ZONES, zoneAt, zoneIndex, zoneById, altitudePay } from './Zones.js';
+import { ZONES, zoneAt, zoneIndex, zoneById, altitudePay, formatAltitude } from './Zones.js';
 import { ACHIEVEMENTS } from './Achievements.js';
 import { refreshMissions, missionProgress } from './Missions.js';
 import { routeAt, flybyAt, toWorld, BODIES, BODY_BY_ID, AU, LY, GC, ROUTE_LENGTH, T as BT, norm, sub, len, dot, cross, mul } from './Route.js';
@@ -142,6 +145,13 @@ export class Game {
 			ark: new Ark( app.scene ),
 		};
 		this.hazards = new Hazards( app.scene, this.particles );
+		// the player's best height for this vehicle, a glowing line across the sky ahead
+		this.bestLine = new Mesh( new ToyBuilder().add( new BoxGeometry( 1, 0.12, 0.12 ), { color: 0xffd23f } ).build(), toyMaterials().glow );
+		this.bestLine.castShadow = false;
+		this.bestLine.visible = false;
+		app.scene.add( this.bestLine );
+		this.hitstop = 0;
+		this.camRoll = 0;
 		this.hazards.onEvent = ( e ) => {
 
 			if ( e === 'thunder' ) this.sound.play( 'thunder' );
@@ -324,6 +334,8 @@ export class Game {
 		this.particles.clear();
 		this.resetVehicle();
 		this.orbit = 0;
+		this.bestLine.visible = false;
+		this.bestLineInfo = null;
 		this.app.post.params.cloudFog.value = 0;
 		if ( instant ) this._camSnap = true;
 		this.ui.show( 'hangar' );
@@ -750,6 +762,14 @@ export class Game {
 	update( dt ) {
 
 		dt = Math.min( dt, 0.05 );
+		// hit-stop: a beat of slow motion on big moments
+		if ( this.hitstop > 0 && this.state === 'flight' ) {
+
+			this.hitstop = Math.max( 0, this.hitstop - dt );
+			dt *= 0.18;
+
+		}
+
 		this.time += dt;
 		const input = this.input;
 		if ( input.hit( 'KeyM' ) ) this.toggleMute();
@@ -1018,6 +1038,25 @@ export class Game {
 			ship: isShip( v ), vehicle: v,
 		};
 		if ( this.warp < 1.5 ) this.hazards.spawnAhead( this.lp, view, ctx );
+		// the line of the best height ahead (balloon and rocket)
+		const bestH = this.save.bestBy[ v ] || 0;
+		const bl = this.bestLine;
+		bl.visible = false;
+		if ( ! isShip( v ) && bestH > 50 && h < bestH && ! r.recordBroken ) {
+
+			const y = this.lp.y + ( bestH - h ) / ctx.hRate;
+			if ( y - this.lp.y < view.halfH * 1.4 ) {
+
+				bl.visible = true;
+				bl.position.set( this.lp.x, y, - 1 );
+				bl.scale.set( view.halfW * 2.6, 1 + view.halfH * 0.004, 1 );
+				this.bestLineInfo = { x: this.lp.x - view.halfW * 0.92, y, text: `BEST ${ formatAltitude( bestH ) }` };
+
+			}
+
+		}
+
+		if ( ! bl.visible ) this.bestLineInfo = null;
 		this.hazards.update( dt, this.lp, view, this.time, ctx );
 		const m = this.model;
 		const c = Math.cos( s.angle || 0 ), sn = Math.sin( s.angle || 0 );
@@ -1239,6 +1278,7 @@ export class Game {
 
 		const s = this.s, m = this.model;
 		hazard.spent = ! LASTING.includes( hazard.type );
+		this.hitstop = 0.12;
 		this.invuln = 1.1;
 		this.shake = 1;
 		const cx = this.lp.x, cy = this.lp.y + m.height * 0.5;
@@ -1272,6 +1312,7 @@ export class Game {
 
 		const r = this.run;
 		r.nearMisses ++;
+		this.hitstop = Math.max( this.hitstop, 0.05 );
 		const bonus = zoneAt( this.realH() ).coin * 4;
 		r.coins += bonus;
 		this.ui.toast( `Close call! +${ fmtMoney( bonus ) }`, 1.1, 'good' );
@@ -1354,7 +1395,10 @@ export class Game {
 				chain.got ++;
 				r.rings = ( r.rings || 0 ) + 1;
 				S.rings = ( S.rings || 0 ) + 1;
-				s.kick = ( s.kick || 0 ) + RING_KICK * ( st.ring || 1 );
+				// a kick: speed for the ships, a surge of lift for the balloon, thrust for the rocket
+				if ( isShip( this.vehicle ) ) s.kick = ( s.kick || 0 ) + RING_KICK * ( st.ring || 1 );
+				else if ( this.vehicle === 'balloon' ) s.kick = ( s.kick || 0 ) + 4;
+				else s.vy += 22;
 				r.coins += p.value;
 				this.sound.play( 'ring', chain.got );
 				this.shake = Math.max( this.shake, 0.3 );
@@ -1364,6 +1408,7 @@ export class Game {
 					const bonus = p.value * chain.n;
 					r.coins += bonus;
 					r.chains = ( r.chains || 0 ) + 1;
+					this.hitstop = Math.max( this.hitstop, 0.08 );
 					if ( st.jumps > 0 && s.jumps < st.jumps ) s.jumps ++;
 					this.ui.toast( `PERFECT CHAIN! +${ fmtMoney( bonus ) }${ st.jumps > 0 ? ' · +1 jump' : '' }`, 1.8, 'record' );
 					this.sound.play( 'chain' );
@@ -1767,6 +1812,10 @@ export class Game {
 
 		}
 
+		// a little roll into the turns
+		const rollWant = st === 'flight' && ! this.photo ? - ( this.input.steer || 0 ) * 0.045 - ( this.jumpFx || 0 ) * 0.02 * Math.sin( this.time * 3 ) : 0;
+		this.camRoll += ( rollWant - this.camRoll ) * Math.min( 1, dt * 3 );
+		cam.up.set( Math.sin( this.camRoll ), Math.cos( this.camRoll ), 0 );
 		cam.position.copy( this.camPos );
 		cam.lookAt( this.camTarget.x, this.camTarget.y, this.camTarget.z );
 		if ( Math.abs( cam.fov - fov ) > 0.01 ) {

@@ -192,6 +192,7 @@ export class UI {
 			<div class="run-cash"><span data-bind="runcash">$0</span></div>
 			<div class="meter"><div class="meter-track" data-bind="track"></div><div class="meter-best" data-bind="mbest"></div><div class="meter-you" data-bind="myou"></div></div>
 			<div class="warns" data-bind="warns"></div>
+			<div class="best-tag hidden" data-bind="bestTag"></div>
 			<div class="countdown" data-bind="countdown"></div>
 			<div class="pause-card hidden" data-bind="pause"><div class="pause-title">Paused</div><button class="btn" data-act="resume">Resume</button><button class="btn small" data-act="abort">End run</button></div>
 			<div class="touch-controls">
@@ -825,6 +826,25 @@ export class UI {
 
 			for ( const m of this.meterMarks || [] ) m.style.bottom = ( this.meterPos( Number( m.dataset.alt ) ) * 100 ).toFixed( 2 ) + '%';
 			this._warnings();
+			// the best-height line's label, at its left end
+			const bi = g.bestLineInfo;
+			for ( const n of this.binds.bestTag ) {
+
+				n.classList.toggle( 'hidden', ! bi );
+				if ( bi ) {
+
+					_p.set( bi.x, bi.y, 0 ).project( g.app.camera );
+					n.style.transform = `translate(${ ( Math.max( 0.02, _p.x * 0.5 + 0.5 ) * innerWidth ).toFixed( 1 ) }px, ${ ( ( 0.5 - _p.y * 0.5 ) * innerHeight ).toFixed( 1 ) }px) translate(0, -120%)`;
+					if ( n._v !== bi.text ) {
+
+						n.textContent = bi.text;
+						n._v = bi.text;
+
+					}
+
+				}
+
+			}
 
 		}
 

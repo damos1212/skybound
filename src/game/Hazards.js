@@ -217,6 +217,16 @@ export class Hazards {
 
 		}
 
+		// ring chains: warp rings in space, hoops in the sky (not right over the beach)
+		guard = 0;
+		while ( this.nextRingY < ahead && guard ++ < 2 ) {
+
+			const h = realAt( this.nextRingY );
+			if ( h > 60 ) this._spawnRingChain( this.nextRingY, player, view, zoneAt( h ), ctx.local ? 1 : 0.35 );
+			this.nextRingY += ctx.local ? 280 + this.rnd() * 240 : 220 + this.nextRingY * 0.12 + this.rnd() * 200;
+
+		}
+
 		// high up and in space: stranded astronauts, lost probes, crystals, the space station
 		if ( ctx.local ) {
 
@@ -228,19 +238,6 @@ export class Hazards {
 				const kind = z.space ? ( roll < 0.45 ? 'crystal' : roll < 0.75 ? 'probe' : 'astronaut' ) : roll < 0.6 ? 'astronaut' : 'crystal';
 				this._spawnPickup( kind, this.nextSpecialY, player, view, z.coin * ( kind === 'crystal' ? 12 : 40 ), ctx );
 				this.nextSpecialY += 700 + this.rnd() * 900;
-
-			}
-
-			// warp ring chains for the space vehicles
-			if ( ctx.ship ) {
-
-				guard = 0;
-				while ( this.nextRingY < ahead && guard ++ < 2 ) {
-
-					this._spawnRingChain( this.nextRingY, player, view, zoneAt( realAt( this.nextRingY ) ) );
-					this.nextRingY += 280 + this.rnd() * 240;
-
-				}
 
 			}
 
@@ -785,13 +782,13 @@ export class Hazards {
 
 	}
 
-	_spawnRingChain( y, player, view, zone ) {
+	_spawnRingChain( y, player, view, zone, wiggle = 1 ) {
 
 		const r = this.rnd;
 		const n = 4 + Math.floor( r() * 3 );
 		const chain = { n, got: 0 };
-		const x0 = player.x + ( r() * 2 - 1 ) * view.halfW * 0.4;
-		const amp = view.halfW * ( 0.12 + r() * 0.28 ), ph = r() * 6;
+		const x0 = player.x + ( r() * 2 - 1 ) * view.halfW * 0.4 * wiggle;
+		const amp = view.halfW * ( 0.12 + r() * 0.28 ) * wiggle, ph = r() * 6;
 		for ( let i = 0; i < n; i ++ ) this._addPickup( 'ring', x0 + Math.sin( ph + i * 0.9 ) * amp, y + i * 26, zone.coin * 3, chain );
 
 	}

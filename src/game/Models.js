@@ -367,7 +367,7 @@ export function mats() {
 		// warp rings
 		ring: new Material( {
 			name: 'warp-ring', lit: false, transparent: true, depthWrite: false, blending: 'additive', uniforms: { tint: [ 'vec3f', [ 0.35, 0.8, 1.0 ] ] },
-			surface: 'let f = sat( abs( dot( in.N, in.V ) ) ); let run = 0.65 + 0.35 * sin( atan2( in.P.y, in.P.x ) * 6.0 - frame.time * 10.0 ); s.albedo = vec3f( 0.0 ); s.emissive = mix( mat.tint * 3.5, vec3f( 6.0 ), f * f * f ) * run; s.alpha = 0.4 + f * 0.6;',
+			surface: 'let f = sat( abs( dot( in.N, in.V ) ) ); let run = 0.65 + 0.35 * sin( atan2( in.P.y, in.P.x ) * 6.0 - frame.time * 10.0 ); s.albedo = vec3f( 0.0 ); s.emissive = mix( mat.tint * 4.0, mat.tint * 6.0 + vec3f( 1.2 ), f * f * f ) * run; s.alpha = 0.4 + f * 0.6;',
 		} ),
 	};
 	MATS.trail.side = 'double';

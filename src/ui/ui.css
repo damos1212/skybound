@@ -329,3 +329,6 @@ kbd { font-family: var(--font-body); font-size: 0.62em; font-weight: 700; paddin
 	.nav { font-size: 11px; }
 	.warns .warn.right { right: 26px; }
 }
+
+.best-tag { position: absolute; left: 0; top: 0; font: 800 12px var(--font-body); letter-spacing: 0.08em; color: #1d2433; background: #ffd23f; padding: 2px 8px; border-radius: 6px; box-shadow: 0 0 14px rgba(255, 210, 63, 0.7); pointer-events: none; }
+.best-tag.hidden { display: none; }

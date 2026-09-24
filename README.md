@@ -9,8 +9,11 @@ the cosmic web to the edge of the observable universe.
 
 It renders with its own WebGPU engine (WGSL shaders, no framework) built on the engine core of
 [Tidewater](https://github.com/dgreenheck/tidewater): a physically based atmosphere you can fly
-out of, volumetric clouds you fly through and above, an FFT ocean, procedural planets, stars,
-nebulae and galaxies, and toy-like vehicles under real sky light.
+out of, volumetric cumulus you fly through and above (casting shadows on the sea and the island), an
+FFT ocean you can see into (the seabed and its caustics through clear turquoise water, breaking
+waves and surf, the island reflected), a procedurally textured island with swaying jungle, ground
+bounce light, contact shadows and ambient occlusion, procedural planets, stars, nebulae and
+galaxies, and toy-like vehicles with enamel, rip-stop and brushed-metal detail under real sky light.
 
 ## What's in it
 
@@ -34,8 +37,10 @@ nebulae and galaxies, and toy-like vehicles under real sky light.
 - **33 hazards**, from gulls, kites, airliners and storm cells to satellites, asteroids and solar
   flares, then plasma balls, sweeping pulsar beams, protostar jets, hypervelocity stars, dark matter,
   alien motherships, cosmic strings to thread and quasar jets.
-- **Warp ring chains** for the space vehicles: every ring kicks your speed, a whole chain pays a
-  bonus and refills a hyperjump.
+- **Ring chains**: sky hoops for the balloon and the rocket, warp rings for the space vehicles; every
+  ring gives a kick, a whole chain pays a bonus (and refills a hyperjump).
+- A glowing line marks your best height ahead of you; hit-stop on big moments, the camera leans
+  into turns.
 - **Pickups**: coins (with combos), fuel, lucky stars, shield / magnet / turbo orbs, stranded
   astronauts, lost probes, space crystals.
 - **Missions** (three at a time per vehicle), close-call bonuses, **77 achievements**, a flight log,
