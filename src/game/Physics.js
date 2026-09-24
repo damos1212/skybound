@@ -262,8 +262,6 @@ export function createShipState( stats, vehicle = 'starship' ) {
 		d: st.d, u: Math.log( st.v ), v: st.v,
 		fuel: stats.fuel, hull: stats.hull, heat: 0, leak: 0, jumps: stats.jumps || 0, jumpT: 0,
 		burning: false, popped: false, time: 0, maxY: st.d, kick: 0, bags: 0,
-		// a run's whole burn: the tank, the sails and fuel cans together can't burn longer than this
-		// (the drives are exponential, so every extra second of burn multiplies the distance)
 		burnLeft: burnBudget( stats ),
 		// speed already gained from kicks (rings, stars, turbo) this run: past a good run's worth, each
 		// more gives less
