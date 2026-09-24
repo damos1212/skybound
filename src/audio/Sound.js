@@ -9,6 +9,7 @@ export class Sound {
 		this.ctx = null;
 		this.muted = false;
 		this.volume = 0.85;
+		this.masterVolume = 0.25;
 		this.burn = 0;
 		this.onUnlock = null;
 
@@ -31,7 +32,10 @@ export class Sound {
 		const comp = ctx.createDynamicsCompressor();
 		comp.threshold.value = - 14;
 		comp.ratio.value = 4;
-		this.master.connect( comp ).connect( ctx.destination );
+		// the overall volume goes after the compressor so turning it down really turns it down
+		this.out = ctx.createGain();
+		this.out.gain.value = this.masterVolume;
+		this.master.connect( comp ).connect( this.out ).connect( ctx.destination );
 		this.sfx = ctx.createGain();
 		this.sfx.gain.value = this.volume;
 		this.sfx.connect( this.master );
@@ -110,6 +114,13 @@ export class Sound {
 
 	}
 
+	setMasterVolume( v ) {
+
+		this.masterVolume = v;
+		if ( this.out ) this.out.gain.setTargetAtTime( v, this.ctx.currentTime, 0.05 );
+
+	}
+
 	update( dt, game ) {
 
 		if ( ! this.ctx ) {
@@ -138,7 +149,7 @@ export class Sound {
 		const thin = space ? 0 : Math.exp( - alt / 9000 );
 		const wind = Math.min( 1, 0.08 + speed / 70 ) * ( 0.15 + 0.85 * thin ) * ( flying ? 1 : 0.5 ) * ( space ? 0 : 1 );
 		this.wind.g.gain.setTargetAtTime( wind * 0.5, t, 0.3 );
-		this.wind.f.frequency.setTargetAtTime( 300 + speed * 12, t, 0.3 );
+		this.wind.f.frequency.setTargetAtTime( Math.min( 9000, 300 + speed * 12 ), t, 0.3 );
 		const sea = space ? 0 : Math.exp( - Math.max( 0, alt - 5 ) / 120 );
 		this.surf.g.gain.setTargetAtTime( sea * 0.35, t, 0.4 );
 		this.surf.f.frequency.setTargetAtTime( 500 + Math.sin( t * 0.4 ) * 250, t, 0.5 );
@@ -294,8 +305,25 @@ export class Sound {
 				this._tone( { type: 'triangle', f0: 1320, dur: 0.4, gain: 0.12, delay: 0.1 } );
 				break;
 			case 'zoneNew':
-			case 'record':
 				arp( [ 523, 659, 784, 1047, 1319 ] );
+				break;
+			case 'record':
+				// a fanfare: a rising run into a held chord with a sparkle on top
+				arp( [ 523, 659, 784, 1047, 1319 ], 'triangle', 0.06, 0.16, 0.3 );
+				[ 1047, 1319, 1568 ].forEach( ( f ) => this._tone( { type: 'triangle', f0: f, dur: 1.2, gain: 0.08, delay: 0.32 } ) );
+				this._noise( { dur: 0.9, gain: 0.18, type: 'highpass', f0: 5000, f1: 9000, delay: 0.3 } );
+				break;
+			case 'milestone':
+				this._tone( { type: 'triangle', f0: 1175, dur: 0.12, gain: 0.1 } );
+				this._tone( { type: 'triangle', f0: 1568, dur: 0.3, gain: 0.09, delay: 0.08 } );
+				break;
+			case 'combo':
+				this._tone( { type: 'square', f0: 660, f1: 1320, dur: 0.25, gain: 0.07 } );
+				arp( [ 1320, 1760 ], 'square', 0.06, 0.06, 0.18 );
+				break;
+			case 'warn':
+				this._tone( { type: 'square', f0: 520, dur: 0.12, gain: 0.08 } );
+				this._tone( { type: 'square', f0: 520, dur: 0.12, gain: 0.08, delay: 0.2 } );
 				break;
 			case 'achievement':
 				arp( [ 784, 988, 1175, 1568 ], 'square', 0.07, 0.07, 0.3 );

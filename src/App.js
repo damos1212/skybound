@@ -15,7 +15,7 @@ import { Island } from './world/Island.js';
 import { Post } from './post/Post.js';
 import { Particles } from './fx/Particles.js';
 import { LocalLights } from './world/LocalLights.js';
-import { installGroundBounce, installContactShadows, installCloudShadows, installAmbientOcclusion, GroundBounce, AmbientOcclusion } from './world/Lighting.js';
+import { installGroundBounce, installContactShadows, installCloudShadows, installAmbientOcclusion, GroundBounce, AmbientOcclusion, ContactShadows } from './world/Lighting.js';
 
 // Owns the renderer and the world systems (sky, clouds, sea, island, particles) and runs the frame.
 // The game (src/game) drives the camera and adds its objects to `scene`.
@@ -270,7 +270,9 @@ export class App {
 		const high = MathUtils.smoothstep( alt, 18000, 70000 );
 		U.starsDay.value = this.space ? 1 : high;
 		U.starIntensity.value = this.space ? 1 : Math.max( G.night.value, high );
-		U.cloudMix.value = this.space ? 0 : 1 - MathUtils.smoothstep( alt, 120000, 220000 );
+		// the volumetric clouds hand over to the planet's painted ones on the way up
+		U.cloudMix.value = this.space ? 0 : 1 - MathUtils.smoothstep( alt, 30000, 60000 );
+		U.planetClouds.value = this.space ? 1 : MathUtils.smoothstep( alt, 25000, 55000 );
 		U.spaceMix.value = this.space ? this.space.spaceMix : 0;
 		U.cirrus.value = this.space ? 0 : 1 - MathUtils.smoothstep( alt, 7000, 9000 );
 		U.planetTime.value += dt;
@@ -327,8 +329,11 @@ export class App {
 
 	applyGfx() {
 
-		AmbientOcclusion.strength.value = this.gfx.ao ? 1 : 0;
-		this.post.params.rays.value = this.gfx.rays ? 0.7 : 0;
+		// (a struggling GPU sheds the screen-space extras for a while: `shed`, not saved)
+		const shed = this.dynRes && this.dynRes.shed;
+		AmbientOcclusion.strength.value = this.gfx.ao && ! shed ? 1 : 0;
+		ContactShadows.strength.value = shed ? 0 : 1;
+		this.post.params.rays.value = this.gfx.rays && ! shed ? 0.7 : 0;
 		if ( ! this.gfx.dynres ) {
 
 			this.dynRes.scale = 1;
@@ -347,12 +352,26 @@ export class App {
 		const ms = d.last ? now - d.last : 16.7;
 		d.last = now;
 		if ( ! this.gfx.dynres || ms > 100 ) return;
-		d.avg += ( ms - d.avg ) * 0.05;
+		d.avg += ( ms - d.avg ) * 0.08;
 		d.t += ms;
-		if ( d.t < 1000 ) return;
+		if ( d.t < 600 ) return;
 		d.t = 0;
-		if ( d.avg > 19.5 && d.scale > 0.6 ) d.scale = Math.max( 0.6, d.scale - 0.08 );
+		if ( d.avg > 19.5 && d.scale > 0.5 ) d.scale = Math.max( 0.5, d.scale - ( d.avg > 26 ? 0.12 : 0.06 ) );
 		else if ( d.avg < 14 && d.scale < 1 ) d.scale = Math.min( 1, d.scale + 0.04 );
+		// still slow at the lowest scale: drop the screen-space extras; bring them back with headroom
+		d.slow = d.scale <= 0.5 && d.avg > 21 ? ( d.slow || 0 ) + 1 : 0;
+		if ( ! d.shed && d.slow >= 4 ) {
+
+			d.shed = true;
+			this.applyGfx();
+
+		} else if ( d.shed && d.avg < 12 ) {
+
+			d.shed = false;
+			this.applyGfx();
+
+		}
+
 		this.post.setScale( Math.round( d.scale * 100 ) / 100 );
 
 	}
@@ -412,17 +431,20 @@ export class App {
 		this.updateSkyParams( this.space ? this.space.altitude : alt, dt );
 		this.atmosphere.update( dt, this.space ? this.space.altitude : alt );
 		this.applyAtmosphereReadback();
-		const cloudsOn = this.clouds && this.cloudsEnabled && ! this.space && alt < 260000;
+		// (from high up the planet shader draws the clouds: the volumetric layer is a speck by then)
+		const cloudsOn = this.clouds && this.cloudsEnabled && ! this.space && alt < 60000;
 		if ( cloudsOn ) this.clouds.update( dt, cam, this.originY, this.originX );
 		else if ( this.clouds ) this.clouds.viewValid.value = 0;
 		this.environment.update( dt );
 		// the island and the sea are drawn shifted by the floating origin (gone in deep space)
 		const world = this.worldVisible && ! this.space;
 		this.island.group.position.set( - this.originX, - this.originY, 0 );
-		this.island.group.visible = world && alt < 150000;
+		this.island.group.visible = world && alt < 60000;
 		GroundBounce.strength.value = world && alt < 20000 ? 1 : 0;
-		this.ocean.mesh.visible = world;
-		if ( world ) {
+		// (above 60 km the sky's planet takes over from the sea mesh: one consistent Earth)
+		const sea = world && alt < 60000;
+		this.ocean.mesh.visible = sea;
+		if ( sea ) {
 
 			this.fft.update( dt );
 			this.ocean.update( cam, this.originX );

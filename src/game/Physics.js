@@ -242,9 +242,17 @@ export const JUMP_TIME = 1.2;
 const bh = BODY_BY_ID.blackhole;
 export const SHIP_START = {
 	starship: { d: ORBIT_START, v: ORBIT_SPEED },
-	warpship: { d: ( LEGS[ BODY_BY_ID.alphacen.leg ].start + 1.52e10 ) * 1000, v: 1.5e10 },
-	ark: { d: ( bh.at + 3 * bh.R ) * 1000, v: 4e14 },
+	warpship: { d: ( LEGS[ BODY_BY_ID.alphacen.leg ].start + 1.52e10 ) * 1000, v: 4e10 },
+	ark: { d: ( bh.at + 3 * bh.R ) * 1000, v: 1e15 },
 };
+
+// a space run's whole burn in seconds: the tank, what the sails can trickle back in a run, and a
+// few seconds of fuel cans (the drives are exponential: every extra second multiplies the distance)
+export function burnBudget( stats ) {
+
+	return stats.fuel + ( stats.regen || 0 ) * 70 + 4;
+
+}
 
 export function createShipState( stats, vehicle = 'starship' ) {
 
@@ -254,6 +262,12 @@ export function createShipState( stats, vehicle = 'starship' ) {
 		d: st.d, u: Math.log( st.v ), v: st.v,
 		fuel: stats.fuel, hull: stats.hull, heat: 0, leak: 0, jumps: stats.jumps || 0, jumpT: 0,
 		burning: false, popped: false, time: 0, maxY: st.d, kick: 0, bags: 0,
+		// a run's whole burn: the tank, the sails and fuel cans together can't burn longer than this
+		// (the drives are exponential, so every extra second of burn multiplies the distance)
+		burnLeft: burnBudget( stats ),
+		// speed already gained from kicks (rings, stars, turbo) this run: past a good run's worth, each
+		// more gives less
+		kickGot: 0,
 	};
 
 }
@@ -263,24 +277,29 @@ export function createShipState( stats, vehicle = 'starship' ) {
 export function stepShip( s, stats, input, dt, sunFlux = 0, maxAdvance = Infinity ) {
 
 	s.time += dt;
-	s.burning = !! input.burn && s.fuel > 0 && ! s.popped;
+	if ( s.burnLeft === undefined ) s.burnLeft = burnBudget( stats );
+	s.burning = !! input.burn && s.fuel > 0 && s.burnLeft > 0 && ! s.popped;
 	let boost = stats.boost;
 	if ( stats.warp && s.d > WARP_FROM ) boost *= IMPROBABILITY;
 	if ( s.burning ) {
 
 		s.u += boost * dt;
 		s.fuel = Math.max( 0, s.fuel - dt );
+		s.burnLeft -= dt;
 
 	} else {
 
 		s.u -= 0.004 * dt;
-		if ( stats.regen > 0 && ! s.popped ) s.fuel = Math.min( stats.fuel, s.fuel + stats.regen * dt );
+		// solar sails trickle propellant back (never past what the run has left to burn)
+		if ( stats.regen > 0 && ! s.popped ) s.fuel = Math.min( stats.fuel, Math.max( 0, s.burnLeft ), s.fuel + stats.regen * dt );
 
 	}
 
 	if ( s.kick > 0 ) {
 
-		s.u += Math.min( s.kick, dt * 2 ) * 0.15;
+		const k = Math.min( s.kick, dt * 2 ) * 0.15;
+		s.u += k / ( 1 + Math.max( 0, ( s.kickGot || 0 ) - 1.5 ) * 2 );
+		s.kickGot = ( s.kickGot || 0 ) + k;
 		s.kick = Math.max( 0, s.kick - dt * 2 );
 
 	}

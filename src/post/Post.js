@@ -339,7 +339,8 @@ fn main( @builtin( local_invocation_id ) lid: vec3u ) {
 		if ( idx < n ) {
 			let x = idx % size.x; let y = idx / size.x;
 			let c = textureLoad( aeTex, vec2i( i32( x ), i32( y ) ), 0 ).rgb;
-			let l = log2( max( luminance( c ), 1e-4 ) );
+			// (black space counts as dim, not as a void: the Earth from orbit mustn't blow out)
+			let l = log2( max( luminance( c ), ae.refLum * 0.04 ) );
 			let uvc = vec2f( ( f32( x ) + 0.5 ) / f32( size.x ), ( f32( y ) + 0.5 ) / f32( size.y ) ) - 0.5;
 			let w = max( 1.0 - length( uvc * vec2f( 1.0, 1.4 ) ) * 1.2, 0.15 );
 			accL += l * w;

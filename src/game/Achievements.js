@@ -1,8 +1,24 @@
 // Achievements: checked on game events (zone reached, run ended, pickups, hits, purchases). Each has a
 // cash reward. `test( save, run )` sees the save (with its lifetime `stats`) and the current run.
 
+import { altitudePay } from './Zones.js';
+
+// what a good run pays at the player's progress: skill and collection achievements (not tied to a
+// zone or a vehicle) pay `pay` times this, so they are worth the same at every stage of the game
+export function runPay( save ) {
+
+	return altitudePay( Math.max( save.best || 0, 100 ) );
+
+}
+
+export function achievementReward( a, save ) {
+
+	return a.pay ? Math.max( a.reward, Math.round( a.pay * runPay( save ) / 10 ) * 10 ) : a.reward;
+
+}
+
 const zone = ( id, name, desc, reward ) => ( { id: 'zone_' + id, name, desc, reward, test: ( s ) => s.zones.includes( id ) } );
-const stat = ( id, name, desc, key, n, reward ) => ( { id, name, desc, reward, test: ( s ) => ( s.stats[ key ] || 0 ) >= n } );
+const stat = ( id, name, desc, key, n, pay ) => ( { id, name, desc, reward: 50, pay, test: ( s ) => ( s.stats[ key ] || 0 ) >= n } );
 
 export const ACHIEVEMENTS = [
 	{ id: 'first_flight', name: 'First Flight', desc: 'Complete your first run', reward: 50, test: ( s ) => s.stats.runs >= 1 },
@@ -37,36 +53,36 @@ export const ACHIEVEMENTS = [
 	zone( 'elgordo', 'Web Walker', 'Reach the cosmic web', 1200000000 ),
 	zone( 'edge', 'Last Light', 'Reach the edge of the observable universe', 2000000000 ),
 	{ id: 'beyond', name: 'Beyond', desc: 'Fly out through the Edge', reward: 5000000000, test: ( s ) => !! s.won },
-	stat( 'coins_100', 'Pocket Change', 'Collect 100 coins', 'coins', 100, 100 ),
-	stat( 'coins_1000', 'Piggy Bank', 'Collect 1,000 coins', 'coins', 1000, 1500 ),
-	stat( 'coins_10000', 'Dragon Hoard', 'Collect 10,000 coins', 'coins', 10000, 40000 ),
-	stat( 'runs_10', 'Frequent Flyer', 'Fly 10 runs', 'runs', 10, 300 ),
-	stat( 'runs_50', 'Dedicated', 'Fly 50 runs', 'runs', 50, 5000 ),
-	stat( 'runs_150', 'Lifer', 'Fly 150 runs', 'runs', 150, 50000 ),
-	stat( 'splash_10', 'Frequent Swimmer', 'Splash down 10 times', 'splashes', 10, 250 ),
-	stat( 'pop_1', 'Pop Goes the Balloon', 'Get popped', 'pops', 1, 100 ),
-	stat( 'zap_1', 'Lightning Rod', 'Get struck by lightning', 'zaps', 1, 200 ),
-	stat( 'shield_10', 'Bubble Wrap', 'Block 10 hits with a bubble', 'blocked', 10, 3000 ),
-	stat( 'orbs_20', 'Power Up', 'Collect 20 power orbs', 'orbs', 20, 2000 ),
-	stat( 'stars_10', 'Lucky Star', 'Collect 10 lucky stars', 'stars', 10, 2500 ),
-	stat( 'astro_5', 'Rescue Ranger', 'Rescue 5 stranded astronauts', 'astronauts', 5, 60000 ),
-	stat( 'probe_1', 'Voyager', 'Recover a lost probe', 'probes', 1, 50000 ),
-	stat( 'crystal_10', 'Shiny', 'Collect 10 space crystals', 'crystals', 10, 80000 ),
-	stat( 'bags_20', 'Ballast Master', 'Drop 20 sandbags', 'bags', 20, 800 ),
-	stat( 'bullseye', 'Bullseye', 'Land the balloon right on the pad', 'bullseyes', 1, 1500 ),
+	stat( 'coins_100', 'Pocket Change', 'Collect 100 coins', 'coins', 100, 0.4 ),
+	stat( 'coins_1000', 'Piggy Bank', 'Collect 1,000 coins', 'coins', 1000, 1 ),
+	stat( 'coins_10000', 'Dragon Hoard', 'Collect 10,000 coins', 'coins', 10000, 2 ),
+	stat( 'runs_10', 'Frequent Flyer', 'Fly 10 runs', 'runs', 10, 0.5 ),
+	stat( 'runs_50', 'Dedicated', 'Fly 50 runs', 'runs', 50, 1.5 ),
+	stat( 'runs_150', 'Lifer', 'Fly 150 runs', 'runs', 150, 3 ),
+	stat( 'splash_10', 'Frequent Swimmer', 'Splash down 10 times', 'splashes', 10, 0.4 ),
+	stat( 'pop_1', 'Pop Goes the Balloon', 'Get popped', 'pops', 1, 0.3 ),
+	stat( 'zap_1', 'Lightning Rod', 'Get struck by lightning', 'zaps', 1, 0.4 ),
+	stat( 'shield_10', 'Bubble Wrap', 'Block 10 hits with a bubble', 'blocked', 10, 1 ),
+	stat( 'orbs_20', 'Power Up', 'Collect 20 power orbs', 'orbs', 20, 1 ),
+	stat( 'stars_10', 'Lucky Star', 'Collect 10 lucky stars', 'stars', 10, 1 ),
+	stat( 'astro_5', 'Rescue Ranger', 'Rescue 5 stranded astronauts', 'astronauts', 5, 1.5 ),
+	stat( 'probe_1', 'Voyager', 'Recover a lost probe', 'probes', 1, 1 ),
+	stat( 'crystal_10', 'Shiny', 'Collect 10 space crystals', 'crystals', 10, 1.5 ),
+	stat( 'bags_20', 'Ballast Master', 'Drop 20 sandbags', 'bags', 20, 0.6 ),
+	stat( 'bullseye', 'Bullseye', 'Land the balloon right on the pad', 'bullseyes', 1, 1 ),
 	{ id: 'afterburner', name: 'Punch It', desc: 'Fire three afterburners in one rocket run', reward: 25000, test: ( s, r ) => !! r && ( r.afterburns || 0 ) >= 3 },
-	{ id: 'untouchable', name: 'Untouchable', desc: 'Climb past 1 km without a scratch', reward: 800, test: ( s, r ) => !! r && r.hits === 0 && r.maxH >= 1000 },
+	{ id: 'untouchable', name: 'Untouchable', desc: 'Climb past 1 km without a scratch', reward: 50, pay: 0.6, test: ( s, r ) => !! r && r.hits === 0 && r.maxH >= 1000 },
 	{ id: 'untouchable_space', name: 'Flawless Flight', desc: 'Reach Mars without taking a hit', reward: 150000, test: ( s, r ) => !! r && r.hits === 0 && r.zones.includes( 'mars' ) },
-	{ id: 'night_owl', name: 'Night Owl', desc: 'Fly a run at night', reward: 500, test: ( s ) => ( s.stats.nightRuns || 0 ) >= 1 },
-	{ id: 'all_times', name: 'Around the Clock', desc: 'Fly at every time of day', reward: 2000, test: ( s ) => ( s.stats.times || [] ).length >= 5 },
+	{ id: 'night_owl', name: 'Night Owl', desc: 'Fly a run at night', reward: 50, pay: 0.4, test: ( s ) => ( s.stats.nightRuns || 0 ) >= 1 },
+	{ id: 'all_times', name: 'Around the Clock', desc: 'Fly at every time of day', reward: 50, pay: 1, test: ( s ) => ( s.stats.times || [] ).length >= 5 },
 	{ id: 'rocketeer', name: 'Rocketeer', desc: 'Unlock the rocket', reward: 5000, test: ( s ) => s.unlocked.includes( 'rocket' ) },
 	{ id: 'starfarer', name: 'Starfarer', desc: 'Unlock the Starship', reward: 50000, test: ( s ) => s.unlocked.includes( 'starship' ) },
 	{ id: 'warp', name: 'Engage', desc: 'Unlock the Warpship', reward: 3000000, test: ( s ) => s.unlocked.includes( 'warpship' ) },
 	{ id: 'ark', name: 'All Aboard', desc: 'Unlock the Infinity Ark', reward: 250000000, test: ( s ) => s.unlocked.includes( 'ark' ) },
 	{ id: 'triple_jump', name: 'Triple Jump', desc: 'Hyperjump three times in one run', reward: 20000000, test: ( s, r ) => !! r && ( r.jumps || 0 ) >= 3 },
-	{ id: 'chain', name: 'Threading the Needle', desc: 'Fly through a whole chain of warp rings', reward: 1000000, test: ( s, r ) => !! r && ( r.chains || 0 ) >= 1 },
-	{ id: 'chain_5', name: 'Ringmaster', desc: 'Complete 5 ring chains in one run', reward: 60000000, test: ( s, r ) => !! r && ( r.chains || 0 ) >= 5 },
-	{ id: 'rings_200', name: 'Lord of the Warp Rings', desc: 'Fly through 200 warp rings', reward: 40000000, test: ( s ) => ( s.stats.rings || 0 ) >= 200 },
+	{ id: 'chain', name: 'Threading the Needle', desc: 'Fly through a whole ring chain', reward: 50, pay: 0.8, test: ( s, r ) => !! r && ( r.chains || 0 ) >= 1 },
+	{ id: 'chain_5', name: 'Ringmaster', desc: 'Complete 5 ring chains in one run', reward: 50, pay: 2.5, test: ( s, r ) => !! r && ( r.chains || 0 ) >= 5 },
+	{ id: 'rings_200', name: 'Ring Runner', desc: 'Fly through 200 rings', reward: 50, pay: 2, test: ( s ) => ( s.stats.rings || 0 ) >= 200 },
 	{ id: 'lightyear', name: 'Light Year', desc: 'Travel a light year', reward: 2000000, test: ( s ) => s.best >= 9.4607e15 },
 	{ id: 'megaparsec', name: 'Megaparsec', desc: 'Travel 3.26 million light years', reward: 400000000, test: ( s ) => s.best >= 3.086e22 },
 	{ id: 'warp_factor', name: 'Warp Factor Ludicrous', desc: 'Go a trillion times faster than light', reward: 300000000, test: ( s ) => ( s.stats.maxSpeed || 0 ) > 2.998e20 },

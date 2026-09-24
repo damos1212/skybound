@@ -58,6 +58,8 @@ export class Sky {
 			spaceMix: [ 'f32', 0 ],
 			// 0..1: how much of the volumetric clouds is composited
 			cloudMix: [ 'f32', 1 ],
+			// 0..1: the planet's own (painted) clouds, taking over from the volumetric ones up high
+			planetClouds: [ 'f32', 1 ],
 			// nebula tint (rgb) and strength (w) for deep space
 			nebula: [ 'vec4f', new Vector4( 0.5, 0.2, 0.7, 0 ) ],
 			// planet surface: time (s) for drifting clouds, city lights strength
@@ -229,22 +231,49 @@ fn skyGroundHit( dir: vec3f ) -> f32 {
 }
 
 // ---- the Earth's surface seen from above (n: surface normal in the planet frame)
-fn skyEarthAlbedo( n: vec3f, t: f32 ) -> vec4f {
+
+// cloud cover at n (0..1). fp: the ground footprint of a pixel (km): the finer cloud scales (cells of
+// a few hundred km, cumulus streets of tens of km, single cumulus of a few km) fade in as it shrinks
+fn skyEarthCloud( n: vec3f, t: f32, fp: f32 ) -> f32 {
+	// weather systems: fronts and swirls from a domain-warped fbm, drifting slowly
+	let w = n * 2.4 + vec3f( t * 0.0015, 0.0, t * 0.001 );
+	let warp = vec3f( skyFbm( w * 1.6, 2 ), skyFbm( w * 1.6 + vec3f( 5.2 ), 2 ), skyFbm( w * 1.6 + vec3f( 9.4 ), 2 ) ) - 0.5;
+	let cov = skyFbm( w + warp * 1.4, 4 );
+	// cells and streets
+	var det = skyFbm( n * 38.0 + warp * 4.0, 3 );
+	let k2 = 1.0 - smoothstep( 0.6, 2.5, fp );
+	if ( k2 > 0.0 ) {
+		let c2 = skyNoise3( n * 260.0 + warp );
+		det = mix( det, det * 0.55 + c2.x * 0.45, k2 );
+	}
+	let k3 = 1.0 - smoothstep( 0.06, 0.25, fp );
+	if ( k3 > 0.0 ) {
+		let c3 = skyNoise3( n * 1900.0 );
+		det = mix( det, det * 0.6 + c3.y * 0.4, k3 );
+	}
+	let d = cov * 0.64 + det * 0.36;
+	// (a sharper edge when the detail is resolved: individual clouds, not a veil)
+	return smoothstep( 0.53, mix( 0.68, 0.6, k2 ), d );
+}
+
+// albedo (rgb) and cloud cover (a) at n; fp as above
+fn skyEarthAlbedo( n: vec3f, t: f32, fp: f32 ) -> vec4f {
 	// the launch island sits under the zenith: keep open sea around it
 	let away = smoothstep( 0.02, 0.25, 1.0 - n.y );
 	let q = n * 2.2 + vec3f( 3.1, 1.7, -2.3 );
-	let land = smoothstep( 0.54, 0.6, skyFbm( q, 6 ) ) * away;
+	let ln = skyFbm( q, 6 ) + ( skyFbm( n * 90.0, 2 ) - 0.5 ) * 0.03 * ( 1.0 - smoothstep( 4.0, 20.0, fp ) );
+	let land = smoothstep( 0.54, 0.6, ln ) * away;
+	// continental shelves: turquoise shallows along the coasts
+	let shelf = smoothstep( 0.47, 0.545, ln ) * ( 1.0 - land ) * away;
 	let polar = smoothstep( 0.82, 0.9, abs( n.z ) );
 	let desert = smoothstep( 0.5, 0.7, skyFbm( n * 5.0 + vec3f( 9.0 ), 4 ) ) * ( 1.0 - smoothstep( 0.3, 0.6, abs( n.z ) ) );
-	let green = mix( vec3f( 0.07, 0.16, 0.05 ), vec3f( 0.2, 0.17, 0.09 ), skyFbm( n * 12.0, 3 ) );
+	let green = mix( vec3f( 0.05, 0.13, 0.04 ), vec3f( 0.17, 0.15, 0.08 ), skyFbm( n * 12.0, 3 ) );
 	let ground = mix( green, vec3f( 0.46, 0.36, 0.22 ), desert );
-	let sea = vec3f( 0.008, 0.04, 0.11 );
+	let sea = mix( vec3f( 0.006, 0.03, 0.09 ), vec3f( 0.02, 0.11, 0.13 ), shelf * 0.8 );
 	var alb = mix( sea, ground, land );
 	alb = mix( alb, vec3f( 0.85, 0.88, 0.92 ), polar );
-	// cloud cover drifting slowly
-	let cq = n * 4.0 + vec3f( t * 0.002, 0.0, t * 0.0013 );
-	let cl = smoothstep( 0.55, 0.76, skyFbm( cq + skyFbm( n * 9.0, 3 ) * 0.6, 5 ) );
-	return vec4f( alb, max( cl, polar * 0.3 ) * 0.9 + land * 0.0 );
+	let cl = skyEarthCloud( n, t, fp );
+	return vec4f( alb, max( cl * 0.95, polar * 0.3 ) );
 }
 
 fn skySurfaceLight( n: vec3f, L: vec3f, dir: vec3f, alb: vec4f, cityK: f32 ) -> vec3f {
@@ -253,11 +282,13 @@ fn skySurfaceLight( n: vec3f, L: vec3f, dir: vec3f, alb: vec4f, cityK: f32 ) -> 
 	let T0 = atmosphereSampleTransmittance( ATMO_RG + 0.5, NdL );
 	let Tsun = mix( T0, vec3f( luminance( T0 ) ), 0.55 );
 	let sun = atmosphereParams.sunIlluminance * Tsun * max( NdL, 0.0 );
-	let surface = mix( alb.rgb, vec3f( 0.8 ), alb.a );
+	// clouds: bright tops, a touch darker where thin
+	let cloudCol = vec3f( 0.86 ) * ( 0.78 + 0.22 * alb.a );
+	let surface = mix( alb.rgb, cloudCol, alb.a );
 	var c = sun * surface * INV_PI;
 	// ocean glint where no cloud / land
 	let H = normalize( L - dir );
-	let glint = pow( max( dot( n, H ), 0.0 ), 180.0 ) * 2.5 * ( 1.0 - alb.a ) * step( alb.r + alb.g, 0.04 );
+	let glint = ( pow( max( dot( n, H ), 0.0 ), 180.0 ) * 2.5 + pow( max( dot( n, H ), 0.0 ), 24.0 ) * 0.06 ) * ( 1.0 - alb.a ) * step( alb.g, alb.b );
 	c += atmosphereParams.sunIlluminance * Tsun * glint * max( NdL, 0.0 );
 	// city lights on the night side (land only, under clear skies)
 	let night = smoothstep( 0.05, -0.15, NdL );
@@ -273,7 +304,18 @@ fn skyGroundRadiance( dir: vec3f ) -> vec3f {
 	let P = skyViewer() + dir * t;
 	let n = normalize( P );
 	let L = atmosphereParams.sunDir;
-	let alb = skyEarthAlbedo( n, skyParams.planetTime );
+	// a pixel's footprint on the ground (km), stretched toward the limb
+	let pix = 2.0 / ( max( frame.proj[ 1 ][ 1 ], 0.1 ) * max( frame.resolution.y, 1.0 ) );
+	let fp = t * pix / max( abs( dot( n, dir ) ), 0.15 );
+	var alb = skyEarthAlbedo( n, skyParams.planetTime, fp );
+	alb.a *= skyParams.planetClouds;
+	// cloud shadows on the sea and land (low orbit, where they resolve)
+	if ( fp < 6.0 ) {
+		let Lt = L - n * dot( n, L );
+		let ns = normalize( n + Lt * ( 4.0 / ATMO_RG ) / max( dot( n, L ), 0.25 ) );
+		let sh = skyEarthCloud( ns, skyParams.planetTime, fp ) * skyParams.planetClouds;
+		alb = vec4f( alb.rgb * ( 1.0 - sh * 0.7 * ( 1.0 - smoothstep( 2.0, 6.0, fp ) ) ), alb.a );
+	}
 	// transmittance ground -> viewer: ( ground -> space ) / ( viewer -> space ) along the ray
 	let Tg = atmosphereSampleTransmittance( ATMO_RG + 0.1, dot( n, -dir ) );
 	let Tv = atmosphereSampleTransmittance( min( atmosphereParams.viewHeight, ATMO_RT ), -dir.y );
@@ -910,7 +952,7 @@ fn skyBodies( dir: vec3f, base: vec3f ) -> vec3f {
 		if ( h.hit ) {
 			var surf: vec3f;
 			if ( kind == 7 ) {
-				let alb = skyEarthAlbedo( h.n, skyParams.planetTime );
+				let alb = skyEarthAlbedo( h.n, skyParams.planetTime, 60.0 );
 				surf = skySurfaceLight( h.n, L, dir, alb, 1.0 ) * info.w;
 			} else if ( kind == 11 ) {
 				let a = skyExoAlbedo( style, h.n, info.y, L );

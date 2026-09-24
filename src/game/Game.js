@@ -14,7 +14,7 @@ import { Input } from './Input.js';
 import { createState, step, dropBag, windAt, createRocketState, stepRocket, createShipState, stepShip, ORBIT_START, SHIP_START, JUMP_TIME, AFTERBURNER_TIME } from './Physics.js';
 import { computeStats, defaultLevels, UPGRADES, VEHICLES, VEHICLE_BY_ID, isShip } from './Upgrades.js';
 import { ZONES, zoneAt, zoneIndex, zoneById, altitudePay, formatAltitude } from './Zones.js';
-import { ACHIEVEMENTS } from './Achievements.js';
+import { ACHIEVEMENTS, achievementReward } from './Achievements.js';
 import { refreshMissions, missionProgress } from './Missions.js';
 import { rollEvent } from './Events.js';
 import { funFact } from './Facts.js';
@@ -50,7 +50,7 @@ function freshSave() {
 		best: 0, bestBy: { balloon: 0, rocket: 0, starship: 0, warpship: 0, ark: 0 }, zones: [ 'shore' ], achievements: {},
 		paints: { rocket: 'classic', starship: 'classic', warpship: 'classic', ark: 'classic' },
 		ownedPaints: [ 'rocket:classic', 'starship:classic', 'warpship:classic', 'ark:classic' ],
-		timeOfDay: 'afternoon', settings: { music: 0.55, sfx: 0.85 }, muted: false,
+		timeOfDay: 'afternoon', settings: { volume: 0.25, music: 0.55, sfx: 0.85 }, muted: false,
 		seen: {}, won: false,
 		stats: { runs: 0, coins: 0, splashes: 0, pops: 0, zaps: 0, blocked: 0, orbs: 0, stars: 0, astronauts: 0, probes: 0, crystals: 0, bags: 0, nightRuns: 0, times: [], maxSpeed: 0, earned: 0, flightTime: 0 },
 	};
@@ -98,6 +98,9 @@ function loadSave() {
 }
 
 const _v = new Vector3();
+const _o1 = new Vector3(), _o2 = new Vector3();
+// altitudes worth a shout on the way up (between the zone banners)
+const MILESTONES = [ 100, 200, 500, 1000, 2000, 3000, 4000, 7500, 10000, 15000, 20000, 30000, 40000, 75000, 150000, 200000, 300000, 500000, 750000, 1e6, 1.5e6, 2e6 ];
 
 const STARS = BODIES.filter( ( b ) => b.star );
 // the Crab pulsar's spin axis and a frame around it
@@ -125,6 +128,9 @@ export class Game {
 		this.camDist = 30;
 		this.camPos = new Vector3( 0, 10, 30 );
 		this.camTarget = new Vector3( 0, 8, 0 );
+		// the camera's position and aim relative to the vehicle (smoothed in its frame)
+		this.camOff = new Vector3( 0, 10, 30 );
+		this.tgtOff = new Vector3( 0, 8, 0 );
 		this.shake = 0;
 		this.hitFlash = 0;
 		this.shieldHit = 0;
@@ -178,6 +184,7 @@ export class Game {
 		this.sound.setMuted( this.save.muted );
 		this.music.setMuted( this.save.muted );
 		this.sound.setVolume( this.save.settings.sfx );
+		this.sound.setMasterVolume( this.save.settings.volume );
 		this.music.setVolume( this.save.settings.music );
 		this.sound.onUnlock = ( ctx, master ) => this.music.attach( ctx, master );
 
@@ -484,12 +491,13 @@ export class Game {
 
 			if ( ok ) {
 
+				const got = { ...a, reward: achievementReward( a, this.save ) };
 				this.save.achievements[ a.id ] = Date.now();
-				this.save.cash += a.reward;
-				this.save.stats.earned = ( this.save.stats.earned || 0 ) + a.reward;
-				this.ui.achievement( a );
+				this.save.cash += got.reward;
+				this.save.stats.earned = ( this.save.stats.earned || 0 ) + got.reward;
+				this.ui.achievement( got );
 				this.sound.play( 'achievement' );
-				if ( this.run && this.state === 'flight' ) this.run.achievements.push( a );
+				if ( this.run && this.state === 'flight' ) this.run.achievements.push( got );
 
 			}
 
@@ -563,6 +571,15 @@ export class Game {
 		const v = this.vehicle;
 		this.sound.play( v === 'balloon' ? 'launch' : 'ignition' );
 		this.app.island.cheer( 3.5 );
+		// the launch: a shove, a punch in and a ring of steam off the pad
+		this.shake = Math.max( this.shake, v === 'balloon' ? 0.35 : 0.8 );
+		this.fovKick = v === 'balloon' ? 3 : 6;
+		for ( let i = 0; i < 28; i ++ ) {
+
+			const a = i / 28 * Math.PI * 2, sp = 7 + Math.random() * 6;
+			this.particles.emit( { soft: true, x: this.lp.x + Math.cos( a ) * 2, y: this.lp.y + 0.5, z: Math.sin( a ) * 2, vx: Math.cos( a ) * sp, vy: 1 + Math.random() * 2, vz: Math.sin( a ) * sp, life: 1.6, size: 1.4, grow: 3, color: [ 0.92, 0.92, 0.9 ], alpha: 0.5, drag: 1.6 } );
+
+		}
 		if ( this.run.event ) this.ui.eventBanner( this.run.event );
 		this._help( v );
 		const qs = this.app.qs;
@@ -1230,6 +1247,7 @@ export class Game {
 			}
 
 			this.ui.zoneBanner( z, fresh );
+			r.lastBanner = r.time;
 			this.sound.play( fresh ? 'zoneNew' : 'zone' );
 			if ( fresh ) this.chromaPulse = 0.5;
 			if ( fresh ) this.checkAchievements( r );
@@ -1241,10 +1259,44 @@ export class Game {
 
 			r.recordBroken = true;
 			if ( this.model.cheer ) this.model.cheer( 2.5 );
-			this.chromaPulse = 0.5;
-			this.ui.toast( 'NEW RECORD!', 2.5, 'record' );
+			// a beat of slow motion, a punch in, confetti
+			this.chromaPulse = 0.7;
+			this.hitstop = Math.max( this.hitstop, 0.35 );
+			this.fovKick = 7;
+			this.shake = Math.max( this.shake, 0.5 );
+			this.ui.shout( 'NEW RECORD!', 'record', `past ${ formatAltitude( best ) }` );
 			this.sound.play( 'record' );
-			this.particles.confetti( this.lp.x, this.lp.y + m.height * 0.8, 80 );
+			this.particles.confetti( this.lp.x, this.lp.y + m.height * 0.8, 120 );
+
+		}
+
+		// ---- altitude milestones between the zones (balloon and rocket)
+		if ( ! isShip( v ) ) {
+
+			r.milestone = r.milestone ?? MILESTONES.findIndex( ( x ) => x > h );
+			if ( r.milestone >= 0 && r.milestone < MILESTONES.length && h >= MILESTONES[ r.milestone ] ) {
+
+				const mh = MILESTONES[ r.milestone ];
+				while ( r.milestone < MILESTONES.length && h >= MILESTONES[ r.milestone ] ) r.milestone ++;
+				if ( r.time - ( r.lastBanner ?? - 9 ) > 1.6 ) {
+
+					this.ui.shout( formatAltitude( mh ), 'milestone' );
+					this.sound.play( 'milestone' );
+					this.chromaPulse = Math.max( this.chromaPulse || 0, 0.15 );
+
+				}
+
+			}
+
+		}
+
+		// ---- low propellant: a warning while there is still time to act
+		const fuelK = s.fuel / Math.max( 1e-3, st.fuel );
+		if ( fuelK < 0.2 && ! r.warnedLow && ! s.popped && r.time > 2 ) {
+
+			r.warnedLow = true;
+			this.sound.play( 'warn' );
+			this.ui.toast( v === 'balloon' ? 'Low fuel! Grab a can or glide' : 'Low fuel!', 1.4, 'bad' );
 
 		}
 
@@ -1261,10 +1313,11 @@ export class Game {
 					r.endReason = 'destroyed';
 					r.endTimer = 1.8;
 
-				} else if ( s.fuel <= 0 && ! s.burning && ! this.flyby && ! final && ! ( s.jumpT > 0 ) ) {
+				} else if ( ! s.burning && ! this.flyby && ! final && ! ( s.jumpT > 0 ) ) {
 
+					// out of propellant (or just coasting a long while): the run drifts to its end
 					this.coastTime = ( this.coastTime || 0 ) + dt;
-					if ( this.coastTime > 2.5 ) {
+					if ( ( this.coastTime > 2.5 && ( s.fuel <= 0.05 || s.burnLeft <= 0 ) ) || this.coastTime > 8 ) {
 
 						r.endReason = 'drift';
 						r.endTimer = 0.5;
@@ -1504,6 +1557,7 @@ export class Game {
 		s.burstT = AFTERBURNER_TIME;
 		r.afterburns = ( r.afterburns || 0 ) + 1;
 		this.shake = Math.max( this.shake, 0.8 );
+		this.fovKick = 9;
 		this.chromaPulse = 0.45;
 		this.sound.play( 'boost' );
 		this.sound.play( 'boom' );
@@ -1527,6 +1581,7 @@ export class Game {
 		r.jumps = ( r.jumps || 0 ) + 1;
 		this.save.stats.jumps = ( this.save.stats.jumps || 0 ) + 1;
 		this.shake = Math.max( this.shake, 0.9 );
+		this.fovKick = 12;
 		this.app.flash = Math.max( this.app.flash || 0, 0.35 );
 		this.sound.play( 'jump' );
 		this.ui.toast( 'HYPERJUMP!', 1.1, 'record' );
@@ -1577,6 +1632,7 @@ export class Game {
 
 		const s = this.s, m = this.model;
 		hazard.spent = ! LASTING.includes( hazard.type );
+		hazard.nearMissed = true; // a hit is no close call
 		this.hitstop = 0.12;
 		this.invuln = 1.1;
 		this.shake = 1;
@@ -1600,6 +1656,16 @@ export class Game {
 		}
 
 		if ( hazard.type === 'storm' ) this.save.stats.zaps ++;
+		// a hit also costs speed: dodging is worth distance, not just survival
+		if ( isShip( this.vehicle ) && this.mode === 'space' ) s.u -= 0.3;
+		else if ( this.vehicle === 'rocket' && s.vy > 0 ) s.vy *= 0.88;
+		else if ( this.vehicle === 'balloon' ) {
+
+			s.vy = Math.min( s.vy, 0 ) - 2;
+			s.heat = Math.max( 0, ( s.heat || 0 ) - 0.12 );
+
+		}
+
 		const zap = [ 'storm', 'beam', 'jetburst', 'cstring' ].includes( hazard.type );
 		this.sound.play( zap ? 'zap' : 'hit' );
 		if ( s.hull > hazard.damage ) this.ui.toast( HIT_TEXT[ hazard.type ] || 'Ouch!', 1.2, 'bad' );
@@ -1611,6 +1677,9 @@ export class Game {
 
 		const r = this.run;
 		r.nearMisses ++;
+		// a whole flock slipping by is one close call's pay
+		if ( r.time - ( r.lastNear ?? - 9 ) < 0.6 ) return;
+		r.lastNear = r.time;
 		this.hitstop = Math.max( this.hitstop, 0.05 );
 		const bonus = zoneAt( this.realH() ).coin * 4 * ( ( r.event && r.event.nearMul ) || 1 );
 		r.coins += bonus;
@@ -1633,6 +1702,15 @@ export class Game {
 				r.lastCoin = r.time;
 				r.bestCombo = Math.max( r.bestCombo, r.combo );
 				const mult = ( r.combo >= 50 ? 3 : r.combo >= 25 ? 2 : r.combo >= 10 ? 1.5 : 1 ) * ( ( r.event && r.event.coinMul ) || 1 );
+				if ( r.combo === 10 || r.combo === 25 || r.combo === 50 ) {
+
+					// (not over a zone banner)
+					if ( r.time - ( r.lastBanner ?? - 9 ) > 2.2 ) this.ui.shout( `COMBO ×${ r.combo === 10 ? '1.5' : r.combo === 25 ? '2' : '3' }`, 'combo' );
+					this.sound.play( 'combo' );
+					this.chromaPulse = Math.max( this.chromaPulse || 0, 0.3 );
+
+				}
+
 				p.value = Math.round( p.value * mult );
 				r.coins += p.value; r.coinCount ++;
 				this.sound.play( 'coin', Math.min( 12, r.combo ) );
@@ -1641,8 +1719,18 @@ export class Game {
 
 			}
 			case 'fuel':
-				s.fuel = Math.min( st.fuel, s.fuel + ( isShip( this.vehicle ) ? 5 : 6 ) );
 				r.fuelCans ++;
+				if ( s.burnLeft !== undefined && Math.min( st.fuel, s.burnLeft ) - s.fuel < 1 ) {
+
+					// the run's burn is spent: the can is worth its scrap
+					p.value = zoneAt( this.realH() ).coin * 5;
+					r.coins += p.value;
+					this.sound.play( 'coin', 6 );
+					break;
+
+				}
+
+				s.fuel = Math.min( st.fuel, s.fuel + ( isShip( this.vehicle ) ? 5 : 6 ), s.burnLeft ?? Infinity );
 				this.sound.play( 'fuel' );
 				this.ui.toast( '+Fuel', 0.9, 'good' );
 				break;
@@ -1668,6 +1756,8 @@ export class Game {
 				break;
 			case 'boostOrb':
 				this.buffs.boost = 3;
+				this.fovKick = 8;
+				this.shake = Math.max( this.shake, 0.4 );
 				r.orbs ++; S.orbs ++;
 				this.sound.play( 'boost' );
 				this.ui.toast( 'Turbo!', 1.2, 'good' );
@@ -1710,8 +1800,16 @@ export class Game {
 					r.chains = ( r.chains || 0 ) + 1;
 					this.hitstop = Math.max( this.hitstop, 0.08 );
 					this.chromaPulse = 0.6;
-					if ( st.jumps > 0 && s.jumps < st.jumps ) s.jumps ++;
-					this.ui.toast( `PERFECT CHAIN! +${ fmtMoney( bonus ) }${ st.jumps > 0 ? ' · +1 jump' : '' }`, 1.8, 'record' );
+					// a chain refills a hyperjump (as many times a run as the capacitor holds)
+					const refill = st.jumps > 0 && s.jumps < st.jumps && ( r.refills || 0 ) < st.jumps;
+					if ( refill ) {
+
+						s.jumps ++;
+						r.refills = ( r.refills || 0 ) + 1;
+
+					}
+
+					this.ui.toast( `PERFECT CHAIN! +${ fmtMoney( bonus ) }${ refill ? ' · +1 jump' : '' }`, 1.8, 'record' );
 					this.sound.play( 'chain' );
 					this.checkAchievements( r );
 
@@ -1768,6 +1866,7 @@ export class Game {
 
 		pp.speed.value += ( spd - pp.speed.value ) * Math.min( 1, dt * 4 );
 		this.chromaPulse = Math.max( 0, ( this.chromaPulse || 0 ) - dt * 1.8 );
+		this.fovKick = ( this.fovKick || 0 ) * Math.exp( - dt * 3.5 );
 		pp.chroma.value = Math.max( this.hitFlash * 0.7, ( this.jumpFx || 0 ) * 0.9, this.chromaPulse, this.state === 'jump' ? 0.6 : 0 );
 
 	}
@@ -2085,12 +2184,16 @@ export class Game {
 
 		} else if ( this.mode === 'space' ) {
 
-			const D = MathUtils.clamp( 42 + Math.abs( lp.vx ) * 0.5, 42, 70 );
+			// far enough back to see the ship, what is coming and the worlds going by
+			const base = Math.max( 78, m.height * 5.2 );
+			const D = MathUtils.clamp( base + Math.abs( lp.vx ) * 0.5, base, base + 30 );
 			this.camDist += ( D - this.camDist ) * Math.min( 1, dt * 1.5 );
 			// near the Earth look down at it; further out, up the route toward what's coming; during a
 			// flyby, turn toward the planet
 			const near = MathUtils.smoothstep( this.s.d, 1.5e6, 3e7 );
 			let pitch = - 0.22 + near * 0.82;
+			// low orbit: look down past the ship at the Earth's curve (easing out as it shrinks behind)
+			const orbit = this.s.d < 8e7 ? 1 - MathUtils.smoothstep( this.s.d, 4e6, 8e7 ) : 0;
 			// (the black hole looks ~4x its horizon with the disk)
 			// (the black hole looks ~4x its horizon with the disk; things all around don't count)
 			const size = ( b ) => b.type === 14 && b.angle < 1.35 ? b.angle * 0.7 : b.angle > 0.75 || b.type === 7 || b.type === 13 ? 0 : b.angle * ( b.type === 8 ? 4 : b.type === 10 ? 2 : 1 );
@@ -2099,14 +2202,18 @@ export class Game {
 			if ( big ) {
 
 				const want = MathUtils.clamp( Math.atan2( big.dir.y, - big.dir.z ) - 0.1, - 0.55, 0.85 );
-				const w = MathUtils.smoothstep( size( big ), 0.01, 0.08 );
+				const w = MathUtils.smoothstep( size( big ), 0.01, 0.08 ) * ( 1 - orbit );
 				pitch += ( want - pitch ) * w;
 
 			}
 
+			pitch += ( - 0.3 - pitch ) * orbit;
+
 			this.spacePitch = this.spacePitch === undefined ? pitch : this.spacePitch + ( pitch - this.spacePitch ) * Math.min( 1, dt * 1.5 );
 			pitch = this.spacePitch;
-			tgt.set( lp.x, lp.y + m.height * 0.5 + this.camDist * Math.sin( pitch ) * 0.8, 0 );
+			// the ship in the lower third with the route ahead above it (in orbit a little above
+			// centre, the Earth below it)
+			tgt.set( lp.x, lp.y + m.height * 0.5 + this.camDist * Math.sin( pitch ) * ( 0.35 + orbit * 0.15 ), 0 );
 			pos = new Vector3( lp.x, lp.y - this.camDist * Math.sin( pitch ) * 0.5, this.camDist * Math.cos( pitch ) );
 			fov = 55 + ( this.jumpFx || 0 ) * 22;
 
@@ -2125,6 +2232,8 @@ export class Game {
 
 		}
 
+		// punches: boosts, afterburners, hyperjumps, the launch, a record
+		fov += this.fovKick || 0;
 		if ( this.photo ) {
 
 			// free orbit around the vehicle
@@ -2135,26 +2244,35 @@ export class Game {
 
 		}
 
-		if ( this.shake > 0 ) {
-
-			this.shake = Math.max( 0, this.shake - dt * 2.5 );
-			const k = this.shake * this.shake * 0.8;
-			pos.x += ( Math.random() - 0.5 ) * k;
-			pos.y += ( Math.random() - 0.5 ) * k;
-
-		}
-
+		// ease the framing in the vehicle's frame: however fast it goes, it stays in shot
+		const ax = lp.x, ay = lp.y;
+		_o1.set( pos.x - ax, pos.y - ay, pos.z );
+		_o2.set( tgt.x - ax, tgt.y - ay, tgt.z );
 		if ( this._camSnap ) {
 
-			this.camPos.copy( pos );
-			this.camTarget.copy( tgt );
+			this.camOff.copy( _o1 );
+			this.tgtOff.copy( _o2 );
 			this._camSnap = false;
 
 		} else {
 
-			const k = 1 - Math.exp( - dt * ( st === 'flight' ? 6 : 2.5 ) );
-			this.camPos.lerp( pos, k );
-			this.camTarget.lerp( tgt, k );
+			const k = 1 - Math.exp( - dt * ( st === 'flight' ? 5 : 2.5 ) );
+			this.camOff.lerp( _o1, k );
+			this.tgtOff.lerp( _o2, k );
+
+		}
+
+		this.camPos.set( ax + this.camOff.x, ay + this.camOff.y, this.camOff.z );
+		this.camTarget.set( ax + this.tgtOff.x, ay + this.tgtOff.y, this.tgtOff.z );
+		// shake after the easing (crisp), scaled with the distance so it reads the same near and far
+		if ( this.shake > 0 ) {
+
+			this.shake = Math.max( 0, this.shake - dt * 2.5 );
+			const k = this.shake * this.shake * this.camOff.length() * 0.025;
+			const t = this.time * 38;
+			const sx = ( Math.sin( t ) + Math.sin( t * 2.3 + 1 ) * 0.5 ) * k, sy = ( Math.cos( t * 1.7 ) + Math.sin( t * 3.1 + 2 ) * 0.5 ) * k;
+			this.camPos.x += sx; this.camPos.y += sy;
+			this.camTarget.x += sx * 0.6; this.camTarget.y += sy * 0.6;
 
 		}
 
@@ -2221,7 +2339,8 @@ export class Game {
 	setVolume( kind, v ) {
 
 		this.save.settings[ kind ] = v;
-		if ( kind === 'music' ) this.music.setVolume( v );
+		if ( kind === 'volume' ) this.sound.setMasterVolume( v );
+		else if ( kind === 'music' ) this.music.setVolume( v );
 		else this.sound.setVolume( v );
 		this.persist();
 

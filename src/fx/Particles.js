@@ -33,7 +33,7 @@ class Batch {
 			velocityWeight: 0,
 			modules: lit ? [ localLightsCoreModule ] : [],
 			attributes: { aPos: 'vec4f', aCol: 'vec4f', aExt: 'vec4f' },
-			varyings: { vCol: 'vec4f', vCorner: 'vec3f' },
+			varyings: lit ? { vCol: 'vec4f', vCorner: 'vec3f', vLL: 'vec3f' } : { vCol: 'vec4f', vCorner: 'vec3f' },
 			vertex: /* wgsl */`
 	// camera-facing quad: right / up from the camera's world matrix, streaks along their velocity
 	let right = normalize( frame.invView[ 0 ].xyz );
@@ -53,7 +53,9 @@ class Batch {
 	v.worldPos = wp;
 	v.worldNormal = normalize( frame.cameraPos - wp );
 	o.vCol = v.aCol;
-	o.vCorner = vec3f( v.position.xy, v.aExt.z );
+	o.vCorner = vec3f( v.position.xy, v.aExt.z );${ lit ? `
+	// the lamps' and engines' glow per corner (smoke overdraws a lot: not per pixel)
+	o.vLL = localLightsIrradiance( wp, normalize( frame.cameraPos - wp ) ) * INV_PI;` : '' }
 `,
 			surface: /* wgsl */`
 	let k = in.vs.vCorner;
@@ -70,7 +72,7 @@ ${ lit ? /* wgsl */`
 	let c2 = k.xy * 2.0;
 	let n = normalize( right * c2.x + up * c2.y + toCam * sqrt( max( 1.0 - dot( c2, c2 ), 0.05 ) ) );
 	let wrap = 0.35 + 0.65 * max( dot( n, frame.sunDir ), 0.0 );
-	let E = frame.sunColor * wrap * INV_PI + frame.skyIrradiance * 1.1 + localLightsIrradiance( in.P, n ) * INV_PI;
+	let E = frame.sunColor * wrap * INV_PI + frame.skyIrradiance * 1.1 + in.vs.vLL;
 	s.emissive = in.vs.vCol.rgb * E;` : /* wgsl */`
 	s.emissive = in.vs.vCol.rgb;` }
 	s.alpha = in.vs.vCol.a * a;

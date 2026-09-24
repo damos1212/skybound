@@ -1,7 +1,7 @@
 import { Vector3 } from '../engine/math/index.js';
 import { UPGRADES, VEHICLES, VEHICLE_BY_ID, isShip } from '../game/Upgrades.js';
 import { ZONES, zoneAt, formatAltitude, formatSpeed, formatMoney } from '../game/Zones.js';
-import { ACHIEVEMENTS } from '../game/Achievements.js';
+import { ACHIEVEMENTS, achievementReward } from '../game/Achievements.js';
 import { TIMES_OF_DAY } from '../App.js';
 import { paintCost, ROCKET_LIVERIES, SHIP_LIVERIES } from '../game/Game.js';
 import { missionProgress } from '../game/Missions.js';
@@ -265,6 +265,8 @@ export class UI {
 		root.appendChild( this.toastBox );
 		this.popLayer = el( 'div', 'pops' );
 		root.appendChild( this.popLayer );
+		this.shoutBox = el( 'div', 'shouts' );
+		root.appendChild( this.shoutBox );
 		this.fader = el( 'div', 'fader' );
 		root.appendChild( this.fader );
 
@@ -517,7 +519,7 @@ export class UI {
 				<div class="ach ${ g.save.achievements[ a.id ] ? 'got' : '' }">
 					<div class="ach-medal">${ g.save.achievements[ a.id ] ? '🏅' : '🔒' }</div>
 					<div><div class="ach-name">${ a.name }</div><div class="ach-desc">${ a.desc }</div></div>
-					<div class="ach-reward">${ formatMoney( a.reward ) }</div>
+					<div class="ach-reward">${ formatMoney( achievementReward( a, g.save ) ) }</div>
 				</div>` ).join( '' ) }</div>`;
 
 		} else if ( kind === 'stats' ) {
@@ -542,6 +544,7 @@ export class UI {
 
 			const q = g.app.settings.quality;
 			body.innerHTML = `<div class="modal-title">Settings</div>
+				<label class="set"><span>Volume</span><input type="range" min="0" max="1" step="0.05" value="${ g.save.settings.volume }" data-k="volume"></label>
 				<label class="set"><span>Music</span><input type="range" min="0" max="1" step="0.05" value="${ g.save.settings.music }" data-k="music"></label>
 				<label class="set"><span>Sound effects</span><input type="range" min="0" max="1" step="0.05" value="${ g.save.settings.sfx }" data-k="sfx"></label>
 				<div class="set"><span>Graphics</span><div class="seg">${ [ 'low', 'medium', 'high' ].map( ( k ) => `<button class="chip ${ q === k ? 'on' : '' }" data-q="${ k }">${ k[ 0 ].toUpperCase() + k.slice( 1 ) }</button>` ).join( '' ) }</div></div>
@@ -699,11 +702,21 @@ export class UI {
 
 	}
 
+	// a big word in the middle of the screen: a record, a milestone, a combo tier
+	shout( text, kind = '', sub = '' ) {
+
+		for ( const o of this.shoutBox.children ) o.classList.add( 'out' );
+		const n = el( 'div', 'shout ' + kind, `<div class="sh-t">${ text }</div>${ sub ? `<div class="sh-s">${ sub }</div>` : '' }` );
+		this.shoutBox.appendChild( n );
+		setTimeout( () => n.remove(), kind === 'record' ? 2200 : 1400 );
+
+	}
+
 	toast( text, seconds = 1.5, kind = '' ) {
 
 		const t = el( 'div', 'toast ' + kind, text );
 		this.toastBox.appendChild( t );
-		while ( this.toastBox.children.length > 4 ) this.toastBox.firstChild.remove();
+		while ( this.toastBox.children.length > 3 ) this.toastBox.firstChild.remove();
 		setTimeout( () => t.classList.add( 'out' ), seconds * 1000 );
 		setTimeout( () => t.remove(), seconds * 1000 + 400 );
 
@@ -720,7 +733,7 @@ export class UI {
 
 	popText( p ) {
 
-		const txt = p.kind === 'fuel' ? '+FUEL' : p.value ? '+' + formatMoney( p.value ) : '';
+		const txt = p.kind === 'fuel' && ! p.value ? '+FUEL' : p.value ? '+' + formatMoney( p.value ) : '';
 		if ( ! txt ) return;
 		const n = el( 'div', 'pop ' + p.kind, txt );
 		this.popLayer.appendChild( n );
@@ -861,7 +874,19 @@ export class UI {
 			const chain = g.hazards.pickups.find( ( p ) => p.kind === 'ring' && p.chain && p.chain.got > 0 && p.chain.got < p.chain.n );
 			const buffs = ( g.buffs.magnet > 0 ? `<span class="buff mag">🧲 ${ Math.ceil( g.buffs.magnet ) }</span>` : '' ) + ( g.buffs.boost > 0 ? '<span class="buff boost">⚡ TURBO</span>' : '' ) + ( chain ? `<span class="buff ring">◎ ${ chain.chain.got } / ${ chain.chain.n }</span>` : '' );
 			this.set( 'buffs', buffs, true );
-			this.set( 'runcash', '+' + formatMoney( g.run ? g.run.coins : 0 ) );
+			const rc = g.run ? g.run.coins : 0;
+			this.set( 'runcash', '+' + formatMoney( rc ) );
+			// the run's cash pill jumps when money comes in
+			if ( rc > ( this._rc || 0 ) ) for ( const n of this.binds.runcash ) {
+
+				const p = n.parentNode;
+				p.classList.remove( 'bump' );
+				void p.offsetWidth;
+				p.classList.add( 'bump' );
+
+			}
+
+			this._rc = rc;
 
 			for ( const n of this.binds.myou ) n.style.bottom = ( this.meterPos( h ) * 100 ).toFixed( 2 ) + '%';
 			const best = save.bestBy[ v ] || 0;
@@ -978,7 +1003,13 @@ export class UI {
 
 	_width( name, f ) {
 
-		for ( const n of this.binds[ name ] || [] ) n.style.width = ( Math.max( 0, Math.min( 1, f ) ) * 100 ).toFixed( 1 ) + '%';
+		const w = ( Math.max( 0, Math.min( 1, f ) ) * 100 ).toFixed( 1 ) + '%';
+		for ( const n of this.binds[ name ] || [] ) if ( n._w !== w ) {
+
+			n.style.width = w;
+			n._w = w;
+
+		}
 
 	}
 

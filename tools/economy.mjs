@@ -7,7 +7,11 @@ import { createState, step, createRocketState, stepRocket } from '../src/game/Ph
 import { ZONES, zoneAt, altitudePay, formatAltitude, formatMoney } from '../src/game/Zones.js';
 import { flyShip } from './shipsim.mjs';
 
-const COINS_PER_SECOND = Number( process.argv[ 2 ] || 0.9 );
+const args = process.argv.slice( 2 );
+const VERBOSE = args.includes( '-v' );
+const COINS_PER_SECOND = Number( args.find( ( a ) => ! a.startsWith( '-' ) ) || 0.9 );
+// the rocket's pickups (Game.onPickup): a hoop's and a lucky star's kick
+const RING_VY = 22, STAR_VY = 60;
 
 function fly( levels, v ) {
 
@@ -46,6 +50,14 @@ function fly( levels, v ) {
 
 			// coasting is time-warped in the game (x up to 40)
 			const warp = s.fuel <= 0 && ! s.boosters && s.vy > 60 && s.y > 30000 ? Math.min( 40, s.vy / 50 ) : 1;
+			// sky hoops (+ thrust) every ~10 s on the way up, a lucky star now and then
+			if ( s.vy > 0 && warp < 1.5 ) {
+
+				if ( ( real % 10 ) + dt > 10 ) s.vy += RING_VY;
+				if ( ( real % 35 ) + dt > 35 ) s.vy += STAR_VY;
+
+			}
+
 			stepRocket( s, st, { burn: true }, dt * warp, 0 ); t += dt * warp; real += dt; track( s.y );
 			if ( s.fuel <= 0 && s.vy < 0 && t > 2 ) break;
 
@@ -63,6 +75,7 @@ function fly( levels, v ) {
 
 const save = { cash: 0, levels: defaultLevels(), unlocked: [ 'balloon' ], zones: new Set( [ 'shore' ] ), best: { balloon: 0, rocket: 0, starship: 0, warpship: 0, ark: 0 } };
 let runs = 0, time = 0;
+const runsBy = new Map();
 const milestones = [];
 const seen = new Set();
 const note = ( what ) => {
@@ -78,6 +91,7 @@ while ( runs < 600 ) {
 	const v = save.unlocked[ save.unlocked.length - 1 ];
 	const r = fly( save.levels, v );
 	runs ++;
+	runsBy.set( v, ( runsBy.get( v ) || 0 ) + 1 );
 	time += r.t + 25; // + time in menus
 	let pay = altitudePay( r.h ) + r.coins;
 	for ( const z of r.zones ) {
@@ -95,6 +109,8 @@ while ( runs < 600 ) {
 	if ( r.h > save.best[ v ] && save.best[ v ] > 0 ) pay += Math.max( 0, altitudePay( r.h ) - altitudePay( save.best[ v ] ) ) * 0.25;
 	save.best[ v ] = Math.max( save.best[ v ], r.h );
 	save.cash += pay;
+	const cashBefore = save.cash;
+	const bought = [];
 	if ( r.end === 'victory' ) {
 
 		note( 'WON' );
@@ -112,6 +128,7 @@ while ( runs < 600 ) {
 
 				save.cash -= next.unlock.cost;
 				save.unlocked.push( next.id );
+				bought.push( 'UNLOCK ' + next.id );
 				note( `unlocked ${ next.name }` );
 				continue;
 
@@ -134,12 +151,18 @@ while ( runs < 600 ) {
 		if ( ! best || best.cost > save.cash ) break;
 		save.cash -= best.cost;
 		save.levels[ cur ][ best.id ] ++;
+		bought.push( best.id );
 
 	}
+
+	if ( VERBOSE ) console.log( `run ${ String( runs ).padStart( 3 ) } ${ v.padEnd( 8 ) } ${ formatAltitude( r.h ).padStart( 14 ) } ${ Math.round( r.t ).toString().padStart( 4 ) }s  pay ${ formatMoney( pay ).padStart( 9 ) }  cash ${ formatMoney( cashBefore ).padStart( 9 ) }  bought ${ bought.length } ${ bought.slice( 0, 4 ).join( ',' ) }` );
 
 	if ( runs % 10 === 0 ) milestones.push( `         … run ${ runs }: ${ save.unlocked.at( -1 ) } best ${ formatAltitude( save.best[ save.unlocked.at( -1 ) ] ) }, cash ${ formatMoney( save.cash ) }` );
 
 }
 
 console.log( milestones.join( '\n' ) );
+const eras = {};
+for ( const [ v, n ] of runsBy ) eras[ v ] = n;
+console.log( 'runs per vehicle:', JSON.stringify( eras ) );
 console.log( `\n${ runs } runs, ~${ ( time / 60 ).toFixed( 0 ) } min` );

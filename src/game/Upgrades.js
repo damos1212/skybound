@@ -12,7 +12,7 @@ export const VEHICLES = [
 	},
 	{
 		id: 'starship', name: 'Starship', blurb: 'Leave orbit behind: the Moon, Mars, the Sun, and beyond.',
-		unlock: { zone: 'leo', cost: 400000, text: 'Reach Low Orbit' },
+		unlock: { zone: 'leo', cost: 260000, text: 'Reach Low Orbit' },
 	},
 	{
 		id: 'warpship', name: 'Warpship', blurb: 'Fold space. Jump past the planets to other stars, nebulae and the heart of the galaxy.',
@@ -20,7 +20,7 @@ export const VEHICLES = [
 	},
 	{
 		id: 'ark', name: 'Infinity Ark', blurb: 'A captive black hole for an engine. Dive through Sagittarius A* and cross the universe.',
-		unlock: { zone: 'blackhole', cost: 2500000000, text: 'Reach Sagittarius A*' },
+		unlock: { zone: 'blackhole', cost: 750000000, text: 'Reach Sagittarius A*' },
 	},
 ];
 
@@ -248,7 +248,7 @@ export const UPGRADES = {
 		{
 			id: 'improbability', name: 'Improbability Drive', icon: 'infinity',
 			blurb: 'Technically impossible. Past Pluto every burn counts double: the way to another star.',
-			levels: [ { name: 'Not installed', cost: 0 }, { name: 'Installed', cost: 12000000 } ],
+			levels: [ { name: 'Not installed', cost: 0 }, { name: 'Installed', cost: 9000000 } ],
 		},
 		...shared( [ 120000, 360000, 800000, 300000, 1200000 ] ),
 	],
@@ -395,6 +395,19 @@ export const UPGRADES = {
 		...shared( [ 2e9, 6e9, 15e9, 4e9, 16e9 ] ),
 	],
 };
+
+// pacing: every price of a vehicle's workshop times this (tuned with tools/economy.mjs so a run
+// usually buys an upgrade or two and no era drags), rounded to two significant digits
+export const COST_SCALE = { balloon: 0.8, rocket: 0.9, starship: 0.85, warpship: 0.65, ark: 0.45 };
+const nice = ( c ) => {
+
+	if ( c < 100 ) return Math.round( c );
+	const p = Math.pow( 10, Math.floor( Math.log10( c ) ) - 1 );
+	return Math.round( c / p ) * p;
+
+};
+
+for ( const v in UPGRADES ) for ( const u of UPGRADES[ v ] ) for ( const l of u.levels ) if ( l.cost ) l.cost = nice( l.cost * COST_SCALE[ v ] );
 
 export function upgradesFor( vehicle ) {
 

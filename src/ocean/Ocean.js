@@ -306,8 +306,13 @@ ${ sky.clouds ? '	sunLight *= cloudsShadow( xz );' : '' }
 
 	// ---- foam: whitecaps, the breaking surf, the swash line on the beach, bubbly and patchy
 	let foamFFT = smoothstep( 0.45, 1.1, in.vs.vDisp.z ) * ( 1.0 - far );
-	let bub = islandFbm( xz * 1.3 + vec2f( t * 0.15, -t * 0.1 ) );
-	let lace = smoothstep( 0.35, 0.75, islandFbm( xz * 0.45 - vec2f( t * 0.05 ) ) * 0.6 + bub * 0.4 );
+	// (the bubble and lace noise only up close: past a couple of km it is sub-pixel)
+	var bub = 0.5;
+	var lace = 0.62;
+	if ( dist < 2500.0 ) {
+		bub = islandFbm( xz * 1.3 + vec2f( t * 0.15, -t * 0.1 ) );
+		lace = smoothstep( 0.35, 0.75, islandFbm( xz * 0.45 - vec2f( t * 0.05 ) ) * 0.6 + bub * 0.4 );
+	}
 	let surf = smoothstep( 0.05, 0.6, in.vs.vShore.x ) * mix( 0.55, 1.0, lace );
 	// behind the breakers a trail of bubbles fades out
 	let trail = smoothstep( 3.0, 1.0, depth ) * smoothstep( -0.3, 0.6, depth ) * lace * 0.45;
@@ -316,15 +321,18 @@ ${ sky.clouds ? '	sunLight *= cloudsShadow( xz );' : '' }
 	let bead = smoothstep( 0.14, 0.02, thickness ) * nearShore * mix( 0.55, 1.0, bub );
 	let sheet = smoothstep( 0.4, 0.1, thickness ) * nearShore * lace * 0.45;
 	// wind streaks: foam combed into long lines down the wind
-	let wd = frame.windDir;
-	let along = dot( xz, wd );
-	let across = dot( xz, vec2f( -wd.y, wd.x ) );
-	let stn = islandNoise( vec2f( along * 0.01 - t * 0.06, across * 0.55 ) ) * 0.7 + islandNoise( vec2f( along * 0.04, across * 1.3 ) ) * 0.3;
-	let windPatch = smoothstep( 0.42, 0.72, islandNoise( xz * 0.0035 + vec2f( t * 0.012, 0.0 ) ) );
-	let streaks = smoothstep( 0.66, 0.86, stn ) * 0.26 * windPatch * ( 1.0 - smoothstep( 300.0, 2000.0, dist ) ) * smoothstep( 4.0, 14.0, depth );
+	var streaks = 0.0;
+	if ( dist < 2000.0 ) {
+		let wd = frame.windDir;
+		let along = dot( xz, wd );
+		let across = dot( xz, vec2f( -wd.y, wd.x ) );
+		let stn = islandNoise( vec2f( along * 0.01 - t * 0.06, across * 0.55 ) ) * 0.7 + islandNoise( vec2f( along * 0.04, across * 1.3 ) ) * 0.3;
+		let windPatch = smoothstep( 0.42, 0.72, islandNoise( xz * 0.0035 + vec2f( t * 0.012, 0.0 ) ) );
+		streaks = smoothstep( 0.66, 0.86, stn ) * 0.26 * windPatch * ( 1.0 - smoothstep( 300.0, 2000.0, dist ) ) * smoothstep( 4.0, 14.0, depth );
+	}
 	// boat wakes: the Kelvin wedge, a churned trail and a bow wave
 	var wake = 0.0;
-	for ( var i = 0; i < 4; i++ ) {
+	for ( var i = 0; i < select( 4, 0, dist > 3000.0 ); i++ ) {
 		let b = os.boats[ i ];
 		if ( b.w <= 0.0 ) { continue; }
 		let fw = vec2f( cos( b.z ), sin( b.z ) );
@@ -361,7 +369,7 @@ ${ sky.clouds ? '	sunLight *= cloudsShadow( xz );' : '' }
 	// function renders the Earth past the edge of this mesh and from orbit)
 	let camAlt = frame.cameraPos.y - frame.seaLevel;
 	let planetK = smoothstep( 6000.0, 30000.0, camAlt );
-	if ( planetK > 0.0 && skyGroundHit( -V ) > 0.0 ) { col = mix( col, skyGroundRadiance( -V ), planetK ); }
+	if ( planetK > 0.0 && skyGroundHit( -V ) > 0.0 ) { col = mix( col, skyGroundRadiance( -V ) + atmosphereSkyLuminance( -V ) * planetK, planetK ); }
 	s.albedo = vec3f( 0.0 );
 	s.emissive = min( col, vec3f( 20000.0 ) );
 `,

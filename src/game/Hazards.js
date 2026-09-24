@@ -1255,7 +1255,8 @@ export class Hazards {
 
 	}
 
-	// hazards that passed within `margin` metres of the player without touching: close calls
+	// hazards that came within `margin` metres of the player and then got away without touching:
+	// close calls (armed on the way in, paid on the way out)
 	nearTest( circles, margin ) {
 
 		const out = [];
@@ -1277,7 +1278,8 @@ export class Hazards {
 
 			}
 
-			if ( near ) {
+			if ( near ) h.nearArmed = true;
+			else if ( h.nearArmed ) {
 
 				h.nearMissed = true;
 				out.push( h );
