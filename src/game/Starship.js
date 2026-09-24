@@ -127,7 +127,9 @@ export class Starship {
 		const rcs = L( 'thrusters' );
 		for ( const sx of [ - 1, 1 ] ) for ( const y of [ 4, len * 0.7 ] ) b.add( new BoxGeometry( 0.35 + rcs * 0.08, 0.5, 0.5 ), { position: [ sx * ( R + 0.12 ), y, 0 ], color: 0x3b3b44 } );
 
-		this.hull = new Mesh( b.build(), this.mats.paint );
+		// the hull has its own copy of the paint so it can glow when it overheats
+		this.hullMat = this.hullMat || this.mats.paint.clone();
+		this.hull = new Mesh( b.build(), this.hullMat );
 		this.hull.castShadow = true;
 		this.hull.receiveShadow = true;
 		this.group.add( this.hull );
@@ -220,8 +222,9 @@ export class Starship {
 		}
 
 		this.glowMat.set( 'k', 0.6 + this.burn * 0.8 + Math.sin( time * 3 ) * 0.1 );
-		// overheating: the hull glows red
-		this.hull.material = this.mats.paint;
+		// overheating: the hull glows red-hot
+		const k = MathUtils.clamp( ( heat - 0.3 ) / 0.8, 0, 1.2 );
+		this.hullMat.emissive = [ 1.6 * k * k, 0.35 * k * k * k, 0.05 * k ];
 		this.bubble.visible = shield > 0.01 || shieldHit > 0.01;
 		this.shieldMat.set( 'strength', shield );
 		this.shieldMat.set( 'hit', shieldHit );

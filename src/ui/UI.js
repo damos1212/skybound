@@ -4,6 +4,8 @@ import { ZONES, zoneAt, formatAltitude, formatSpeed, formatMoney } from '../game
 import { ACHIEVEMENTS } from '../game/Achievements.js';
 import { TIMES_OF_DAY } from '../App.js';
 import { paintCost, ROCKET_LIVERIES, SHIP_LIVERIES } from '../game/Game.js';
+import { missionProgress } from '../game/Missions.js';
+import { LEGS, legAt } from '../game/Route.js';
 
 // DOM overlay: the hangar (garage, time of day, journey ladder), the workshop and paint shop, the
 // flight HUD, results, modals (achievements, stats, settings), the ending credits, banners, toasts.
@@ -109,7 +111,10 @@ export class UI {
 				<button class="icon-btn" data-act="settings" title="Settings">⚙️</button>
 				<button class="icon-btn mute" data-act="mute" title="Sound (M)"></button>
 			</div>
-			<div class="garage" data-bind="garage"></div>
+			<div class="left-col">
+				<div class="garage" data-bind="garage"></div>
+				<div class="missions" data-bind="missions"></div>
+			</div>
 			<div class="menu">
 				<button class="btn big primary" data-act="launch">LAUNCH <kbd>Space</kbd></button>
 				<button class="btn big" data-act="shop">WORKSHOP <kbd>U</kbd></button>
@@ -164,7 +169,10 @@ export class UI {
 				<div class="zone" data-bind="zone"></div>
 				<div class="vs" data-bind="vs"></div>
 				<div class="warp hidden" data-bind="warp"></div>
+				<div class="nav" data-bind="nav"></div>
 			</div>
+			<div class="combo hidden" data-bind="combo"></div>
+			<div class="mtrack" data-bind="mtrack"></div>
 			<div class="gauges">
 				<div class="gauge fuel"><span class="gicon">${ icon( 'tank', 22 ) }</span><div class="bar"><div class="fill" data-bind="fuel"></div></div></div>
 				<div class="gauge heat" data-bind="heatRow"><span class="gicon" data-bind="heatIcon">${ icon( 'flame', 22 ) }</span><div class="bar"><div class="fill" data-bind="heat"></div></div></div>
@@ -277,6 +285,7 @@ export class UI {
 			this.renderLadder();
 			this.renderGarage();
 			this.renderTimeOfDay();
+			this.renderMissions();
 
 		}
 
@@ -317,6 +326,24 @@ export class UI {
 			box.appendChild( card );
 
 		}
+
+	}
+
+	missionValue( m, v ) {
+
+		return m.type === 'reach' || m.type === 'nohit' ? formatAltitude( v ) : String( Math.floor( v ) );
+
+	}
+
+	renderMissions() {
+
+		const g = this.game, box = this.binds.missions[ 0 ];
+		const list = g.missions;
+		box.innerHTML = `<div class="missions-title">Missions <span>${ VEHICLE_BY_ID[ g.vehicle ].name }</span></div>` + list.map( ( m ) => `
+			<div class="mission">
+				<div class="m-text">${ m.text }</div>
+				<div class="m-row"><div class="m-bar"><div style="width:${ Math.min( 100, ( m.progress || 0 ) / m.target * 100 ).toFixed( 0 ) }%"></div></div><span class="m-reward">${ formatMoney( m.reward ) }</span></div>
+			</div>` ).join( '' );
 
 	}
 
@@ -476,7 +503,7 @@ export class UI {
 				<div class="set"><span>Graphics</span><div class="seg">${ [ 'low', 'medium', 'high' ].map( ( k ) => `<button class="chip ${ q === k ? 'on' : '' }" data-q="${ k }">${ k[ 0 ].toUpperCase() + k.slice( 1 ) }</button>` ).join( '' ) }</div></div>
 				<div class="set-note">Changing graphics reloads the game (progress is saved).</div>
 				<div class="set danger"><span>Start over</span><button class="btn small" data-act="reset">Reset progress</button></div>
-				<div class="set-note">Controls: Space / hold click to thrust · A D to steer · Shift for a sandbag · Esc to pause · M to mute · 1 2 3 to pick a vehicle.</div>`;
+				<div class="set-note">Controls: Space / hold click to thrust · A D to steer · Shift for a sandbag · Esc to pause · M to mute · 1 2 3 to pick a vehicle · C for photo mode (on the pad, paused or after a run).</div>`;
 			for ( const inp of body.querySelectorAll( 'input[type=range]' ) ) inp.addEventListener( 'input', () => g.setVolume( inp.dataset.k, Number( inp.value ) ) );
 			for ( const b of body.querySelectorAll( '[data-q]' ) ) this.click( b, () => {
 
@@ -715,6 +742,19 @@ export class UI {
 			const warp = g.warp > 1.5 ? `⏩ Coasting ×${ Math.round( g.warp ) }` : '';
 			this.set( 'warp', warp );
 			for ( const n of this.binds.warp ) n.classList.toggle( 'hidden', ! warp );
+			this.set( 'nav', this.navText( h ) );
+			const r = g.run;
+			const combo = r && r.combo >= 3 && r.time - r.lastCoin < 1.4 ? r.combo : 0;
+			const mult = combo >= 50 ? 3 : combo >= 25 ? 2 : combo >= 10 ? 1.5 : 1;
+			this.set( 'combo', combo ? `${ combo } combo${ mult > 1 ? ` · ×${ mult }` : '' }` : '' );
+			for ( const n of this.binds.combo ) {
+
+				n.classList.toggle( 'hidden', ! combo );
+				n.classList.toggle( 'hot', mult > 1 );
+
+			}
+
+			this._missionTracker();
 			this._width( 'fuel', s.fuel / st.fuel );
 			for ( const n of this.binds.fuel ) n.classList.toggle( 'low', s.fuel / st.fuel < 0.2 );
 			// second gauge: envelope heat / booster burn / solar heat
@@ -782,6 +822,66 @@ export class UI {
 			return true;
 
 		} );
+
+	}
+
+	navText( h ) {
+
+		const g = this.game;
+		if ( g.vehicle === 'starship' && g.mode === 'space' ) {
+
+			const km = g.s.d / 1000;
+			let i = legAt( km );
+			let leg = LEGS[ i ];
+			let rem = leg.start + leg.length - km;
+			if ( rem < leg.body.R * 3 && i + 1 < LEGS.length ) {
+
+				i ++;
+				leg = LEGS[ i ];
+				rem = leg.start + leg.length - km;
+
+			}
+
+			const eta = rem * 1000 / Math.max( 1, g.s.v );
+			const etaText = eta > 3600 ? '—' : eta > 90 ? `${ Math.round( eta / 60 ) } min` : `${ Math.max( 0, Math.round( eta ) ) } s`;
+			return `Next: ${ leg.body.name } · ${ formatAltitude( rem * 1000 ) } · ${ g.s.burning || eta < 3600 ? etaText : '—' }`;
+
+		}
+
+		const z = ZONES.find( ( q ) => q.from > h && ! q.space );
+		return z ? `Next: ${ z.name } in ${ formatAltitude( z.from - h ) }` : '';
+
+	}
+
+	_missionTracker() {
+
+		const g = this.game, r = g.run, box = this.binds.mtrack[ 0 ];
+		if ( ! r ) return;
+		const list = ( g.save.missions || {} )[ g.vehicle ] || [];
+		let html = '';
+		for ( const m of list ) {
+
+			if ( m.done ) continue;
+			const p = Math.max( m.progress || 0, missionProgress( m, r ) );
+			const done = p >= m.target;
+			if ( done && ! m._toasted && ! [ 'land', 'night' ].includes( m.type ) ) {
+
+				m._toasted = true;
+				this.toast( 'Mission complete!', 1.6, 'record' );
+				g.sound.play( 'mission' );
+
+			}
+
+			html += `<div class="mt ${ done ? 'done' : '' }"><span>${ done ? '✔' : '◦' } ${ m.text }</span><b>${ done ? '' : `${ this.missionValue( m, p ) } / ${ this.missionValue( m, m.target ) }` }</b></div>`;
+
+		}
+
+		if ( box._v !== html ) {
+
+			box.innerHTML = html;
+			box._v = html;
+
+		}
 
 	}
 

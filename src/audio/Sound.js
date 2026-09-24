@@ -200,15 +200,31 @@ export class Sound {
 
 	}
 
-	play( name ) {
+	play( name, step = 0 ) {
 
 		if ( ! this.ctx ) return;
 		const arp = ( notes, type = 'triangle', gap = 0.08, gain = 0.16, dur = 0.35 ) => notes.forEach( ( f, i ) => this._tone( { type, f0: f, dur, gain, delay: i * gap } ) );
 		switch ( name ) {
 
-			case 'coin':
-				this._tone( { type: 'square', f0: 1320, dur: 0.06, gain: 0.08 } );
-				this._tone( { type: 'square', f0: 1760, dur: 0.14, gain: 0.08, delay: 0.05 } );
+			case 'coin': {
+
+				// climbs a major scale with the combo
+				const k = Math.pow( 2, [ 0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21 ][ Math.min( 12, step ) ] / 12 );
+				this._tone( { type: 'square', f0: 1320 * k, dur: 0.06, gain: 0.08 } );
+				this._tone( { type: 'square', f0: 1760 * k, dur: 0.14, gain: 0.08, delay: 0.05 } );
+				break;
+
+			}
+
+			case 'boom':
+				this._noise( { dur: 1.4, gain: 1.1, f0: 900, f1: 50 } );
+				this._tone( { f0: 70, f1: 30, dur: 0.9, gain: 0.6 } );
+				break;
+			case 'whoosh':
+				this._noise( { dur: 0.45, gain: 0.5, type: 'bandpass', f0: 2500, f1: 400, q: 2 } );
+				break;
+			case 'mission':
+				[ 659, 880, 1109, 1319 ].forEach( ( f, i ) => this._tone( { type: 'square', f0: f, dur: 0.2, gain: 0.07, delay: i * 0.07 } ) );
 				break;
 			case 'fuel':
 				this._tone( { f0: 180, f1: 520, dur: 0.25, gain: 0.3 } );

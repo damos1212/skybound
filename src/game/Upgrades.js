@@ -8,11 +8,11 @@ export const VEHICLES = [
 	},
 	{
 		id: 'rocket', name: 'Sounding Rocket', blurb: 'Real engines. Staged boosters. Aim for the edge of space.',
-		unlock: { zone: 'strato', cost: 12000, text: 'Reach the Stratosphere' },
+		unlock: { zone: 'strato', cost: 10000, text: 'Reach the Stratosphere' },
 	},
 	{
 		id: 'starship', name: 'Starship', blurb: 'Leave orbit behind: the Moon, Mars, the Sun, and beyond.',
-		unlock: { zone: 'leo', cost: 150000, text: 'Reach Low Orbit' },
+		unlock: { zone: 'leo', cost: 400000, text: 'Reach Low Orbit' },
 	},
 ];
 
@@ -40,8 +40,8 @@ export const UPGRADES = {
 				{ name: 'Patchwork Quilt', cost: 0, lift: 1.0, size: 1.0 },
 				{ name: 'Nylon Stripes', cost: 150, lift: 1.3, size: 1.08 },
 				{ name: 'Rip-Stop Racer', cost: 600, lift: 1.7, size: 1.16 },
-				{ name: 'Mylar Mirror', cost: 2200, lift: 2.7, size: 1.26 },
-				{ name: 'Stratos Hybrid', cost: 8000, lift: 4.4, size: 1.4 },
+				{ name: 'Mylar Mirror', cost: 1700, lift: 2.7, size: 1.26 },
+				{ name: 'Stratos Hybrid', cost: 6000, lift: 4.4, size: 1.4 },
 			],
 		},
 		{
@@ -51,8 +51,8 @@ export const UPGRADES = {
 				{ name: 'Camp Stove', cost: 0, heat: 0.9 },
 				{ name: 'Propane Single', cost: 120, heat: 1.3 },
 				{ name: 'Twin Blast', cost: 500, heat: 1.9 },
-				{ name: 'Jet Coil', cost: 1900, heat: 2.8 },
-				{ name: 'Plasma Torch', cost: 7000, heat: 4.0 },
+				{ name: 'Jet Coil', cost: 1500, heat: 2.8 },
+				{ name: 'Plasma Torch', cost: 5200, heat: 4.0 },
 			],
 		},
 		{
@@ -62,8 +62,8 @@ export const UPGRADES = {
 				{ name: 'One Bottle', cost: 0, fuel: 16 },
 				{ name: 'Two Bottles', cost: 100, fuel: 26 },
 				{ name: 'Three Bottles', cost: 420, fuel: 38 },
-				{ name: 'Racing Cylinders', cost: 1500, fuel: 58 },
-				{ name: 'Cryo Tanks', cost: 5200, fuel: 85 },
+				{ name: 'Racing Cylinders', cost: 1200, fuel: 58 },
+				{ name: 'Cryo Tanks', cost: 4000, fuel: 85 },
 			],
 		},
 		{
@@ -73,8 +73,8 @@ export const UPGRADES = {
 				{ name: 'Wicker Basket', cost: 0, hull: 3, mass: 1.0 },
 				{ name: 'Braced Wicker', cost: 180, hull: 4, mass: 0.96 },
 				{ name: 'Aluminium Cage', cost: 800, hull: 5, mass: 0.9 },
-				{ name: 'Carbon Pod', cost: 2800, hull: 6, mass: 0.84 },
-				{ name: 'Pressure Capsule', cost: 9000, hull: 8, mass: 0.8 },
+				{ name: 'Carbon Pod', cost: 2100, hull: 6, mass: 0.84 },
+				{ name: 'Pressure Capsule', cost: 6800, hull: 8, mass: 0.8 },
 			],
 		},
 		{
@@ -84,7 +84,7 @@ export const UPGRADES = {
 				{ name: 'Hand Paddle', cost: 0, fan: 5 },
 				{ name: 'Desk Fans', cost: 140, fan: 9 },
 				{ name: 'Ducted Props', cost: 650, fan: 14 },
-				{ name: 'Turbofans', cost: 2400, fan: 21 },
+				{ name: 'Turbofans', cost: 1800, fan: 21 },
 			],
 		},
 		{
@@ -226,7 +226,7 @@ export const UPGRADES = {
 		{
 			id: 'improbability', name: 'Improbability Drive', icon: 'infinity',
 			blurb: 'Technically impossible. Required for the centre of the galaxy.',
-			levels: [ { name: 'Not installed', cost: 0 }, { name: 'Installed', cost: 9000000 } ],
+			levels: [ { name: 'Not installed', cost: 0 }, { name: 'Installed', cost: 12000000 } ],
 		},
 		...shared( [ 120000, 360000, 800000, 300000, 1200000 ] ),
 	],

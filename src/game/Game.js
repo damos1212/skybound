@@ -8,6 +8,7 @@ import { createState, step, dropBag, windAt, createRocketState, stepRocket, crea
 import { computeStats, defaultLevels, UPGRADES, VEHICLES, VEHICLE_BY_ID } from './Upgrades.js';
 import { ZONES, zoneAt, zoneIndex, zoneById, altitudePay } from './Zones.js';
 import { ACHIEVEMENTS } from './Achievements.js';
+import { refreshMissions, missionProgress } from './Missions.js';
 import { routeAt, flybyAt, toWorld, BODIES, SUN, AU, ROUTE_LENGTH, norm, sub, len } from './Route.js';
 import { LAUNCH, BARGE, islandHeight } from '../world/Island.js';
 import { TIMES_OF_DAY } from '../App.js';
@@ -152,6 +153,35 @@ export class Game {
 
 		this.ui = new UI( this.root, this );
 		app.setTimeOfDay( this.save.timeOfDay );
+		// photo mode camera: drag to orbit, wheel to zoom
+		this.photo = null;
+		const canvas = app.engine.canvas;
+		let drag = null;
+		canvas.addEventListener( 'pointerdown', ( e ) => {
+
+			if ( this.photo ) drag = { x: e.clientX, y: e.clientY };
+
+		} );
+		window.addEventListener( 'pointermove', ( e ) => {
+
+			if ( ! this.photo || ! drag ) return;
+			this.photo.yaw -= ( e.clientX - drag.x ) * 0.006;
+			this.photo.pitch = MathUtils.clamp( this.photo.pitch + ( e.clientY - drag.y ) * 0.005, - 1.3, 1.4 );
+			drag = { x: e.clientX, y: e.clientY };
+
+		} );
+		window.addEventListener( 'pointerup', () => {
+
+			drag = null;
+
+		} );
+		canvas.addEventListener( 'wheel', ( e ) => {
+
+			if ( ! this.photo ) return;
+			e.preventDefault();
+			this.photo.dist = MathUtils.clamp( this.photo.dist * Math.exp( e.deltaY * 0.001 ), 6, 600 );
+
+		}, { passive: false } );
 		window.addEventListener( 'blur', () => {
 
 			if ( this.state === 'flight' && ! this.paused ) this.setPaused( true );
@@ -227,6 +257,22 @@ export class Game {
 		for ( const k in this.models ) this.models[ k ].group.visible = k === v;
 		this.buildModel( v );
 		if ( v === 'rocket' ) this.models.rocket.clearDropped();
+
+	}
+
+	missionContext( v = this.vehicle ) {
+
+		const lv = this.save.levels[ v ];
+		const ids = Object.keys( lv );
+		const tier = Math.round( ids.reduce( ( a, k ) => a + lv[ k ], 0 ) / Math.max( 1, ids.length ) * 1.6 );
+		const st = this.stats( v );
+		return { v, best: this.save.bestBy[ v ] || 0, tier, bags: st.bags || 0, shield: st.shield || 0 };
+
+	}
+
+	get missions() {
+
+		return refreshMissions( this.save, this.missionContext() );
 
 	}
 
@@ -414,6 +460,7 @@ export class Game {
 	launch() {
 
 		if ( this.state !== 'hangar' ) return;
+		if ( this.photo ) this.togglePhoto();
 		this.sound.unlock();
 		const v = this.vehicle;
 		this.resetVehicle();
@@ -426,7 +473,9 @@ export class Game {
 			vehicle: v, coins: 0, coinCount: 0, fuelCans: 0, stars: 0, hits: 0, blocked: 0, orbs: 0, astronauts: 0, probes: 0, crystals: 0,
 			zonesNew: [], zones: [], zone: 'shore', endTimer: - 1, endReason: '', recordBroken: false, maxH: 0, overheated: false,
 			achievements: [], time: 0, timeOfDay: this.app.timeOfDay,
+			nearMisses: 0, combo: 0, bestCombo: 0, lastCoin: - 10, bags: 0, maxHBeforeHit: 0, missionsDone: [],
 		};
+		void this.missions; // make sure this vehicle has its three missions
 		this.hazards.reset();
 		this.particles.clear();
 		this.ui.show( 'hud' );
@@ -512,6 +561,23 @@ export class Game {
 		if ( this.state !== 'flight' ) return;
 		this.state = 'results';
 		const r = this.run;
+		r.endReason = reason;
+		r.maxH = Math.max( r.maxH, this.realH() );
+		// missions: pay out the ones this run completed
+		let missionPay = 0;
+		for ( const m of this.save.missions[ r.vehicle ] || [] ) {
+
+			if ( m.done ) continue;
+			m.progress = Math.max( m.progress || 0, missionProgress( m, r ) );
+			if ( m.progress >= m.target ) {
+
+				m.done = true;
+				missionPay += m.reward;
+				r.missionsDone.push( m );
+
+			}
+
+		}
 		const maxH = Math.max( r.maxH, this.realH() );
 		const tod = TIMES_OF_DAY[ r.timeOfDay ] || TIMES_OF_DAY.afternoon;
 		const pay = Math.round( altitudePay( maxH ) );
@@ -521,7 +587,7 @@ export class Game {
 		const recordBonus = record && prevBest > 0 ? Math.round( Math.max( 0, pay - altitudePay( prevBest ) ) * 0.25 ) : 0;
 		const sub = pay + r.coins + zoneBonus + recordBonus;
 		const todBonus = Math.round( sub * ( tod.bonus - 1 ) );
-		const total = sub + todBonus;
+		const total = sub + todBonus + missionPay;
 		this.save.cash += total;
 		this.save.bestBy[ r.vehicle ] = Math.max( prevBest, maxH );
 		this.save.best = Math.max( this.save.best, maxH );
@@ -547,6 +613,7 @@ export class Game {
 				...r.zonesNew.map( ( id ) => [ `New zone: ${ zoneById( id ).name }`, zoneById( id ).bonus ] ),
 				...( recordBonus ? [ [ 'New record bonus', recordBonus ] ] : [] ),
 				...( todBonus ? [ [ `${ tod.name } flight bonus`, todBonus ] ] : [] ),
+				...r.missionsDone.map( ( m ) => [ `✔ ${ m.text }`, m.reward ] ),
 			],
 			achievements: r.achievements,
 			total,
@@ -563,6 +630,8 @@ export class Game {
 	}
 
 	returnToPad() {
+
+		if ( this.photo ) this.togglePhoto();
 
 		this.ui.fade( () => {
 
@@ -589,6 +658,7 @@ export class Game {
 		this.time += dt;
 		const input = this.input;
 		if ( input.hit( 'KeyM' ) ) this.toggleMute();
+		if ( input.hit( 'KeyC' ) && ( this.state !== 'flight' || this.paused ) && this.state !== 'countdown' && this.state !== 'ascent' ) this.togglePhoto();
 
 		switch ( this.state ) {
 
@@ -697,6 +767,7 @@ export class Game {
 				this.models.balloon.setBags( s.bags );
 				this.sound.play( 'bag' );
 				this.save.stats.bags ++;
+				r.bags ++;
 				this.particles.burst( 12, { soft: true, x: s.x, y: s.y + 0.5, speed: 3, life: 1.2, size: 0.8, grow: 2, color: [ 0.8, 0.7, 0.5 ], alpha: 0.7, gravity: - 4 } );
 
 			}
@@ -782,6 +853,22 @@ export class Game {
 		const h = this.realH();
 		r.maxH = Math.max( r.maxH, h );
 		const speed = v === 'starship' ? s.v : Math.hypot( s.vx, s.vy );
+		// breaking the sound barrier in the thick air: a vapour cone and a boom
+		if ( v === 'rocket' && ! r.boom && speed > 343 && s.y < 18000 ) {
+
+			r.boom = true;
+			this.sound.play( 'boom' );
+			this.shake = Math.max( this.shake, 0.6 );
+			this.ui.toast( 'Sonic boom!', 1.2 );
+			const m = this.model;
+			for ( let i = 0; i < 48; i ++ ) {
+
+				const a = i / 48 * Math.PI * 2;
+				this.particles.emit( { soft: true, x: this.lp.x + Math.cos( a ) * m.radius * 2.2, y: this.lp.y + m.height * 0.55, z: Math.sin( a ) * m.radius * 2.2, vx: Math.cos( a ) * 6, vy: - 30, vz: Math.sin( a ) * 6, life: 1.1, size: 2.2, grow: 3, color: [ 0.95, 0.97, 1 ], alpha: 0.75, drag: 2 } );
+
+			}
+
+		}
 		this.save.stats.maxSpeed = Math.max( this.save.stats.maxSpeed || 0, speed );
 		this.buffs.magnet = Math.max( 0, this.buffs.magnet - dt );
 		this.buffs.boost = Math.max( 0, this.buffs.boost - dt );
@@ -804,6 +891,7 @@ export class Game {
 
 			const hit = this.hazards.hitTest( circles );
 			if ( hit ) this.onHit( hit );
+			else for ( const hz of this.hazards.nearTest( circles, 3.5 ) ) this.onNearMiss( hz );
 
 		}
 
@@ -956,6 +1044,7 @@ export class Game {
 	damage( n, kind ) {
 
 		const s = this.s;
+		if ( this.run.hits === 0 ) this.run.maxHBeforeHit = this.run.maxH;
 		s.hull = Math.max( 0, s.hull - n );
 		s.leak += 0.05 * n;
 		this.run.hits ++;
@@ -1015,17 +1104,38 @@ export class Game {
 
 	}
 
+	onNearMiss( h ) {
+
+		const r = this.run;
+		r.nearMisses ++;
+		const bonus = zoneAt( this.realH() ).coin * 4;
+		r.coins += bonus;
+		this.ui.toast( `Close call! +${ fmtMoney( bonus ) }`, 1.1, 'good' );
+		this.sound.play( 'whoosh' );
+		this.particles.burst( 10, { x: h.x, y: h.y, speed: 8, life: 0.4, size: 0.35, color: [ 4, 6, 8 ], kind: 2, drag: 2 } );
+
+	}
+
 	onPickup( p ) {
 
 		const s = this.s, st = this.stats(), r = this.run, S = this.save.stats;
 		const burst = ( colors, n = 14 ) => this.particles.burst( n, { x: p.x, y: p.y, speed: 10, life: 0.6, size: 0.45, colors, drag: 2 } );
 		switch ( p.kind ) {
 
-			case 'coin':
+			case 'coin': {
+
+				// combo: coins in quick succession multiply their value
+				r.combo = r.time - r.lastCoin < 1.4 ? r.combo + 1 : 1;
+				r.lastCoin = r.time;
+				r.bestCombo = Math.max( r.bestCombo, r.combo );
+				const mult = r.combo >= 50 ? 3 : r.combo >= 25 ? 2 : r.combo >= 10 ? 1.5 : 1;
+				p.value = Math.round( p.value * mult );
 				r.coins += p.value; r.coinCount ++;
-				this.sound.play( 'coin' );
+				this.sound.play( 'coin', Math.min( 12, r.combo ) );
 				burst( [ [ 8, 6, 1.5 ] ], 6 );
 				break;
+
+			}
 			case 'fuel':
 				s.fuel = Math.min( st.fuel, s.fuel + ( this.vehicle === 'starship' ? 5 : 6 ) );
 				r.fuelCans ++;
@@ -1299,6 +1409,16 @@ export class Game {
 
 		}
 
+		if ( this.photo ) {
+
+			// free orbit around the vehicle
+			const p = this.photo;
+			tgt.set( lp.x, lp.y + m.height * 0.5, 0 );
+			pos = new Vector3( tgt.x + Math.sin( p.yaw ) * Math.cos( p.pitch ) * p.dist, tgt.y + Math.sin( p.pitch ) * p.dist, Math.cos( p.yaw ) * Math.cos( p.pitch ) * p.dist );
+			this._camSnap = true;
+
+		}
+
 		if ( this.shake > 0 ) {
 
 			this.shake = Math.max( 0, this.shake - dt * 2.5 );
@@ -1343,6 +1463,25 @@ export class Game {
 	}
 
 	// ---------------------------------------------------------------- settings
+
+	togglePhoto() {
+
+		if ( this.photo ) {
+
+			this.photo = null;
+			this.root.classList.remove( 'photo' );
+			return;
+
+		}
+
+		const cam = this.app.camera;
+		const t = this.camTarget;
+		const d = cam.position.clone().sub( t );
+		this.photo = { yaw: Math.atan2( d.x, d.z ), pitch: Math.asin( MathUtils.clamp( d.y / d.length(), - 1, 1 ) ), dist: d.length(), spin: 0 };
+		this.root.classList.add( 'photo' );
+		this.ui.toast( 'Photo mode · drag to orbit · scroll to zoom · C to exit', 3 );
+
+	}
 
 	toggleMute() {
 

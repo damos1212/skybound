@@ -236,6 +236,7 @@ export class App {
 		U.cloudMix.value = this.space ? 0 : 1 - MathUtils.smoothstep( alt, 120000, 220000 );
 		U.spaceMix.value = this.space ? this.space.spaceMix : 0;
 		U.planetTime.value += dt;
+		U.aurora.value = this.space ? 0 : Math.max( G.night.value * 0.8, MathUtils.smoothstep( alt, 45000, 90000 ) * ( 1 - MathUtils.smoothstep( alt, 400000, 900000 ) ) * 0.6 );
 		if ( this.space ) {
 
 			this.sky.setBodies( this.space.bodies );

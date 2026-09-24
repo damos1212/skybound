@@ -10,10 +10,10 @@ export const ZONES = [
 	{ id: 'clouds', name: 'Cloud Deck', from: 1500, bonus: 600, coin: 10, color: '#e8eef6', tagline: 'Punch through the cumulus' },
 	{ id: 'high', name: 'High Skies', from: 5000, bonus: 2500, coin: 25, color: '#4f8fe6', tagline: 'Airliners and the jet stream' },
 	{ id: 'strato', name: 'Stratosphere', from: 12000, bonus: 8000, coin: 60, color: '#2a3f8f', tagline: 'Where the sky turns black' },
-	{ id: 'meso', name: 'Edge of Space', from: 50000, bonus: 25000, coin: 150, color: '#1a1f45', tagline: 'Meteors and the aurora' },
-	{ id: 'leo', name: 'Low Orbit', from: 100000, bonus: 60000, coin: 350, color: '#141a3c', tagline: 'Satellites and the space station' },
-	{ id: 'meo', name: 'High Orbit', from: 2000000, bonus: 120000, coin: 700, color: '#10142f', tagline: 'Space junk and navigation satellites' },
-	{ id: 'cislunar', name: 'Cislunar Space', from: 40000000, bonus: 200000, coin: 1200, color: '#0d1026', tagline: 'Deep, quiet dark' },
+	{ id: 'meso', name: 'Edge of Space', from: 50000, bonus: 12000, coin: 120, color: '#1a1f45', tagline: 'Meteors and the aurora' },
+	{ id: 'leo', name: 'Low Orbit', from: 100000, bonus: 30000, coin: 220, color: '#141a3c', tagline: 'Satellites and the space station' },
+	{ id: 'meo', name: 'High Orbit', from: 2000000, bonus: 80000, coin: 400, color: '#10142f', tagline: 'Space junk and navigation satellites' },
+	{ id: 'cislunar', name: 'Cislunar Space', from: 40000000, bonus: 100000, coin: 600, color: '#0d1026', tagline: 'Deep, quiet dark' },
 	...ROUTE_ZONES,
 ];
 

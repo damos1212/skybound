@@ -29,6 +29,17 @@ async function boot() {
 	setLoading( 1, 'Ready' );
 	loader.classList.add( 'hidden' );
 	app.start( ( dt ) => game.update( dt ) );
+	// the GPU can be reset under us (driver update, sleep, too many tabs): offer a reload
+	app.gpu.device.lost.then( ( info ) => {
+
+		if ( info.reason === 'destroyed' ) return;
+		const box = document.createElement( 'div' );
+		box.className = 'device-lost';
+		box.innerHTML = '<div class="card"><div class="res-title">Graphics reset</div><p>The browser restarted the GPU. Your progress is saved.</p><button class="btn big primary">Reload</button></div>';
+		box.querySelector( 'button' ).onclick = () => location.reload();
+		document.body.appendChild( box );
+
+	} );
 	window.__game = game;
 	window.__timings = timings;
 

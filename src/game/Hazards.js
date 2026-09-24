@@ -881,6 +881,41 @@ export class Hazards {
 
 	}
 
+	// hazards that passed within `margin` metres of the player without touching: close calls
+	nearTest( circles, margin ) {
+
+		const out = [];
+		for ( const h of this.items ) {
+
+			if ( h.spent || h.nearMissed ) continue;
+			let near = false;
+			for ( const c of h.circles ) {
+
+				if ( c.off ) continue;
+				const hx = h.x + c.ox * h.mesh.scale.x, hy = h.y + c.oy * h.mesh.scale.y;
+				const hr = c.r * h.mesh.scale.x + margin;
+				for ( const p of circles ) {
+
+					const dx = p.x - hx, dy = p.y - hy;
+					if ( dx * dx + dy * dy < ( p.r + hr ) * ( p.r + hr ) ) near = true;
+
+				}
+
+			}
+
+			if ( near ) {
+
+				h.nearMissed = true;
+				out.push( h );
+
+			}
+
+		}
+
+		return out;
+
+	}
+
 	collect( circles, center, magnet ) {
 
 		const got = [];

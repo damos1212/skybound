@@ -85,15 +85,15 @@ const Z = ( id, name, i, bonus, coin, color, tagline ) => {
 };
 
 export const ROUTE_ZONES = [
-	Z( 'moon', 'The Moon', 0, 400000, 2000, '#bfc2c8', 'Grey dust and a long way home' ),
-	Z( 'mars', 'Mars', 1, 700000, 3500, '#d9763f', 'Rust, dust storms and two tiny moons' ),
-	Z( 'sun', 'The Sun', 2, 1200000, 6000, '#ffcf3f', 'Solar flares! Mind the heat' ),
-	Z( 'jupiter', 'Jupiter', 3, 1800000, 9000, '#d8b48a', 'The king of planets' ),
-	Z( 'saturn', 'Saturn', 4, 2500000, 12000, '#e6d2a0', 'Thread the rings' ),
-	Z( 'neptune', 'Neptune', 5, 3500000, 16000, '#4e6fe0', 'Supersonic winds, ice giants' ),
-	Z( 'kuiper', 'Kuiper Belt', 6, 5000000, 22000, '#a89a8a', 'Frozen worlds at the edge' ),
-	{ id: 'interstellar', name: 'Interstellar Space', from: ( LEGS[ 7 ].start + 1.5e10 ) * 1000, bonus: 8000000, coin: 30000, color: '#2a1a4a', tagline: 'Needs the Improbability Drive', space: true },
-	Z( 'blackhole', 'Sagittarius A*', 7, 25000000, 50000, '#ff9a3c', 'The heart of the galaxy' ),
+	Z( 'moon', 'The Moon', 0, 150000, 800, '#bfc2c8', 'Grey dust and a long way home' ),
+	Z( 'mars', 'Mars', 1, 300000, 1200, '#d9763f', 'Rust, dust storms and two tiny moons' ),
+	Z( 'sun', 'The Sun', 2, 500000, 1800, '#ffcf3f', 'Solar flares! Mind the heat' ),
+	Z( 'jupiter', 'Jupiter', 3, 700000, 2500, '#d8b48a', 'The king of planets' ),
+	Z( 'saturn', 'Saturn', 4, 900000, 3000, '#e6d2a0', 'Thread the rings' ),
+	Z( 'neptune', 'Neptune', 5, 1200000, 3600, '#4e6fe0', 'Supersonic winds, ice giants' ),
+	Z( 'kuiper', 'Kuiper Belt', 6, 1600000, 4200, '#a89a8a', 'Frozen worlds at the edge' ),
+	{ id: 'interstellar', name: 'Interstellar Space', from: ( LEGS[ 7 ].start + 1.5e10 ) * 1000, bonus: 2000000, coin: 5000, color: '#2a1a4a', tagline: 'Needs the Improbability Drive', space: true },
+	Z( 'blackhole', 'Sagittarius A*', 7, 5000000, 8000, '#ff9a3c', 'The heart of the galaxy' ),
 ];
 
 // leg index for a path distance (km)

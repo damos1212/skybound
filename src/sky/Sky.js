@@ -59,9 +59,10 @@ export class Sky {
 			nebula: [ 'vec4f', new Vector4( 0.5, 0.2, 0.7, 0 ) ],
 			// planet surface: time (s) for drifting clouds, city lights strength
 			planetTime: [ 'f32', 0 ],
+			// aurora curtains (0..1): night skies and the edge of space
+			aurora: [ 'f32', 0 ],
 			bodyCount: [ 'u32', 0 ],
 			pad0: [ 'f32', 0 ],
-			pad1: [ 'f32', 0 ],
 			// per body: xyz direction from the camera (unit), w angular radius (rad)
 			bodyDir: [ 'vec4f[8]', v4s() ],
 			// x type, y spin (rad), z ring tilt / spare, w brightness
@@ -80,6 +81,7 @@ export class Sky {
 		this.sunGlow = U.sunGlow;
 		this.nebula = U.nebula;
 		this.planetTime = U.planetTime;
+		this.aurora = U.aurora;
 		this._module = null;
 		this._background = null;
 
@@ -165,18 +167,20 @@ fn skyEarthAlbedo( n: vec3f, t: f32 ) -> vec4f {
 	let desert = smoothstep( 0.5, 0.7, skyFbm( n * 5.0 + vec3f( 9.0 ), 4 ) ) * ( 1.0 - smoothstep( 0.3, 0.6, abs( n.z ) ) );
 	let green = mix( vec3f( 0.07, 0.16, 0.05 ), vec3f( 0.2, 0.17, 0.09 ), skyFbm( n * 12.0, 3 ) );
 	let ground = mix( green, vec3f( 0.46, 0.36, 0.22 ), desert );
-	let sea = vec3f( 0.006, 0.025, 0.06 );
+	let sea = vec3f( 0.008, 0.04, 0.11 );
 	var alb = mix( sea, ground, land );
 	alb = mix( alb, vec3f( 0.85, 0.88, 0.92 ), polar );
 	// cloud cover drifting slowly
 	let cq = n * 4.0 + vec3f( t * 0.002, 0.0, t * 0.0013 );
-	let cl = smoothstep( 0.5, 0.72, skyFbm( cq + skyFbm( n * 9.0, 3 ) * 0.6, 5 ) );
+	let cl = smoothstep( 0.55, 0.76, skyFbm( cq + skyFbm( n * 9.0, 3 ) * 0.6, 5 ) );
 	return vec4f( alb, max( cl, polar * 0.3 ) * 0.9 + land * 0.0 );
 }
 
 fn skySurfaceLight( n: vec3f, L: vec3f, dir: vec3f, alb: vec4f, cityK: f32 ) -> vec3f {
 	let NdL = dot( n, L );
-	let Tsun = atmosphereSampleTransmittance( ATMO_RG + 0.5, NdL );
+	// (a little less of the low sun's orange: the planet reads blue and white from orbit)
+	let T0 = atmosphereSampleTransmittance( ATMO_RG + 0.5, NdL );
+	let Tsun = mix( T0, vec3f( luminance( T0 ) ), 0.55 );
 	let sun = atmosphereParams.sunIlluminance * Tsun * max( NdL, 0.0 );
 	let surface = mix( alb.rgb, vec3f( 0.8 ), alb.a );
 	var c = sun * surface * INV_PI;
@@ -259,6 +263,24 @@ fn skyStars( dir0: vec3f ) -> vec3f {
 	// extinction toward the horizon inside the atmosphere; none in space
 	let horizon = mix( smoothstep( 0.0, 0.2, dir.y ), 1.0, skyParams.starsDay );
 	return ( star + glow ) * skyParams.starIntensity * horizon;
+}
+
+// aurora: rippling green curtains with violet tops low over the northern horizon (fantasy: the
+// island is tropical), stronger from the edge of space
+fn skyAurora( dir: vec3f ) -> vec3f {
+	let k = skyParams.aurora;
+	if ( k <= 0.0 || skyGroundHit( dir ) > 0.0 ) { return vec3f( 0.0 ); }
+	let az = atan2( dir.x, -dir.z );
+	let north = smoothstep( 1.9, 0.3, abs( az + 0.2 ) );
+	let t = skyParams.planetTime;
+	let wave = az * 3.0 + sin( az * 7.0 + t * 0.3 ) * 0.4 + sin( az * 17.0 - t * 0.5 ) * 0.1;
+	let rays = pow( sat( skyVnoise( vec3f( wave * 6.0, t * 0.15, 1.0 ) ) ), 3.0 ) * 1.5 + 0.2;
+	let base = 0.03 + sin( az * 2.3 + t * 0.1 ) * 0.02;
+	let h = dir.y - base;
+	let curtain = smoothstep( 0.0, 0.03, h ) * exp( - max( h, 0.0 ) * 6.0 );
+	let top = smoothstep( 0.05, 0.3, h );
+	let col = mix( vec3f( 0.15, 1.0, 0.45 ), vec3f( 0.6, 0.25, 1.0 ), top );
+	return col * curtain * rays * north * k * 0.02;
 }
 
 fn skyNebula( dir: vec3f ) -> vec3f {
@@ -469,6 +491,7 @@ fn skyBackground( dir: vec3f, starK: f32 ) -> vec3f {
 		let occ = select( 1.0, 0.0, skyGroundHit( dir ) > 0.0 && atm > 0.5 );
 		L += ( skyMoonSky( dir ) * atm + skyStars( dir ) * starK + skyNebula( dir ) ) * occ;
 	}
+	L += skyAurora( dir ) * atm;
 	return L;
 }
 
