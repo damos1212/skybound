@@ -294,6 +294,7 @@ export class Game {
 		this.save.timeOfDay = id;
 		this.app.setTimeOfDay( id );
 		this.persist();
+		if ( this.state === 'hangar' ) this.ui.renderTimeOfDay();
 
 	}
 
@@ -922,23 +923,33 @@ export class Game {
 	// the difference goes into the app's floating origin so the world stays where it really is
 	followLocal( dt, lateral ) {
 
-		const s = this.s, lp = this.lp;
-		lp.vy = MathUtils.clamp( s.vy, - 130, 130 );
-		lp.y += lp.vy * dt;
-		if ( lateral ) {
+		const s = this.s, lp = this.lp, app = this.app;
+		// within the cap the drawn position tracks the real one exactly (the origin holds still)
+		if ( Math.abs( s.vy ) <= 130 ) {
 
-			lp.vx = MathUtils.clamp( s.vx, - 45, 45 );
+			lp.vy = s.vy;
+			lp.y = s.y - app.originY;
+
+		} else {
+
+			lp.vy = Math.sign( s.vy ) * 130;
+			lp.y += lp.vy * dt;
+			app.originY = s.y - lp.y;
+
+		}
+
+		if ( lateral && Math.abs( s.vx ) > 45 ) {
+
+			lp.vx = Math.sign( s.vx ) * 45;
 			lp.x += lp.vx * dt;
+			app.originX = s.x - lp.x;
 
 		} else {
 
 			lp.vx = s.vx;
-			lp.x = s.x;
+			lp.x = s.x - app.originX;
 
 		}
-
-		this.app.originY = s.y - lp.y;
-		this.app.originX = s.x - lp.x;
 
 	}
 
@@ -1256,11 +1267,13 @@ export class Game {
 			// flyby, turn toward the planet
 			const near = MathUtils.smoothstep( this.s.d, 1.5e6, 3e7 );
 			let pitch = - 0.22 + near * 0.82;
-			const big = this.app.space && this.app.space.bodies.reduce( ( a, b ) => ( b.type !== 7 && b.type !== 8 && b.angle > ( a ? a.angle : 0.01 ) ? b : a ), null );
+			// (the black hole looks ~4x its horizon with the disk)
+			const size = ( b ) => b.angle * ( b.type === 8 ? 4 : 1 );
+			const big = this.app.space && this.app.space.bodies.reduce( ( a, b ) => ( b.type !== 7 && size( b ) > ( a ? size( a ) : 0.01 ) ? b : a ), null );
 			if ( big ) {
 
 				const want = MathUtils.clamp( Math.atan2( big.dir.y, - big.dir.z ) - 0.1, - 0.3, 1.1 );
-				const w = MathUtils.smoothstep( big.angle, 0.01, 0.08 );
+				const w = MathUtils.smoothstep( size( big ), 0.01, 0.08 );
 				pitch += ( want - pitch ) * w;
 
 			}
