@@ -14,7 +14,7 @@ import { Ocean } from './ocean/Ocean.js';
 import { Island } from './world/Island.js';
 import { Post } from './post/Post.js';
 import { Particles } from './fx/Particles.js';
-import { installGroundBounce, installContactShadows, installCloudShadows, GroundBounce } from './world/Lighting.js';
+import { installGroundBounce, installContactShadows, installCloudShadows, installAmbientOcclusion, GroundBounce } from './world/Lighting.js';
 
 // Owns the renderer and the world systems (sky, clouds, sea, island, particles) and runs the frame.
 // The game (src/game) drives the camera and adds its objects to `scene`.
@@ -112,6 +112,7 @@ export class App {
 		installGroundBounce();
 		installCloudShadows( this.clouds );
 		installContactShadows( this.sceneRenderer.opaqueCopy.depthTexture );
+		installAmbientOcclusion( this.sceneRenderer.opaqueCopy.depthTexture );
 		G.exposure.value = this.settings.exposure;
 
 		this.updateSun();

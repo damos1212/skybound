@@ -16,6 +16,64 @@ import { islandModule } from './Island.js';
 // sand): a short screen-space march toward the sun through the previous frame's opaque depth,
 // reprojected with last frame's view-projection. Installed as the `contactShadow` hook.
 
+// Ambient occlusion: a small hemisphere of samples around each point, tested against the previous
+// frame's opaque depth (reprojected, as the contact shadows): creases, the ground under the pad and
+// the props, trunks in the grass lose some of the sky light. Installed as the `ambientModulation` hook.
+const aoParams = new UniformBlock( 'AOParams', { strength: [ 'f32', 1 ] }, { label: 'ambientOcclusion' } );
+export const AmbientOcclusion = { strength: aoParams.fields.strength };
+
+export function installAmbientOcclusion( depthTexture ) {
+
+	SceneLighting.set( 'ambientModulation', new ShaderModule( {
+		name: 'hook-ambientOcclusion',
+		deps: [ commonModule ],
+		uniforms: aoParams,
+		uniformName: 'aoParams',
+		bindings: { aoDepth: { texture: () => depthTexture } },
+		code: /* wgsl */`
+fn hookAmbientModulation( P: vec3f, N: vec3f ) -> vec3f {
+#if IS_WATER || PASS_LATE || PASS_DEPTH || PASS_COLOR || NO_SSAO
+	return vec3f( 1.0 );
+#else
+	let fwd = -vec3f( frame.view[ 0 ][ 2 ], frame.view[ 1 ][ 2 ], frame.view[ 2 ][ 2 ] );
+	let w0 = dot( P - frame.cameraPos, fwd );
+	if ( aoParams.strength <= 0.0 || w0 > 90.0 || w0 < 0.3 ) { return vec3f( 1.0 ); }
+	let texSize = vec2f( textureDimensions( aoDepth ) );
+	let R = 0.9 + w0 * 0.012;
+	let T0 = normalize( select( vec3f( 1.0, 0.0, 0.0 ), vec3f( 0.0, 0.0, 1.0 ), abs( N.x ) > 0.8 ) - N * select( N.x, N.z, abs( N.x ) > 0.8 ) );
+	let B0 = cross( N, T0 );
+	let cc = frame.viewProj * vec4f( P, 1.0 );
+	let pix = floor( ( cc.xy / cc.w * vec2f( 0.5, -0.5 ) + 0.5 ) * frame.resolution );
+	let rot = ( interleavedGradientNoise( pix ) + f32( frame.frameIndex % 8u ) * 0.125 ) * 6.2832;
+	let cr = cos( rot ); let sr = sin( rot );
+	let T = T0 * cr + B0 * sr;
+	let B = B0 * cr - T0 * sr;
+	var occ = 0.0;
+	for ( var i = 0; i < 8; i++ ) {
+		let fi = f32( i );
+		let ka = fi * 2.39996;
+		let kr = sqrt( ( fi + 0.5 ) / 8.0 );
+		let k = vec4f( cos( ka ) * kr, sin( ka ) * kr, sqrt( 1.0 - kr * kr ) * 0.8 + 0.2, 0.25 + 0.75 * pow2( ( fi + 1.0 ) / 8.0 ) );
+		let S = P + ( T * k.x + B * k.y + N * k.z ) * R * k.w + N * 0.04;
+		let q = frame.prevViewProjNoJitter * vec4f( S, 1.0 );
+		let iw = 1.0 / max( q.w, 1e-4 );
+		let uv = q.xy * iw * vec2f( 0.5, -0.5 ) + 0.5;
+		if ( any( uv < vec2f( 0.0 ) ) || any( uv > vec2f( 1.0 ) ) ) { continue; }
+		let d = textureLoad( aoDepth, vec2i( min( uv * texSize, texSize - 1.0 ) ), 0 );
+		let k2 = frame.near * iw * iw;
+		let diff = d - q.z * iw;
+		// the depth buffer is in front of the sample (within range): occluded
+		occ += select( 0.0, 1.0, diff > 0.02 * k2 && diff < R * 1.6 * k2 );
+	}
+	let ao = 1.0 - occ / 8.0 * 0.85 * aoParams.strength * smoothstep( 90.0, 60.0, w0 );
+	return vec3f( ao * ao );
+#endif
+}
+`,
+	} ) );
+
+}
+
 // Cloud shadows: the volumetric clouds' shadow map darkens the sun on everything below the cloud base
 // (the island, the props, the vehicles on the pad). Installed as the `directModulation` hook.
 export function installCloudShadows( clouds ) {

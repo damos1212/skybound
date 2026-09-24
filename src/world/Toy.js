@@ -1,5 +1,6 @@
 import { BufferGeometry, Float32BufferAttribute } from '../engine/geometry/index.js';
 import { Material } from '../engine/render/Material.js';
+import { ShaderModule } from '../engine/gpu/Shader.js';
 import { Color, Matrix4, Vector3, Quaternion, Euler } from '../engine/math/index.js';
 
 // "Toy" look: chunky primitives with baked vertex colours, merged into one geometry per object so a
@@ -49,7 +50,8 @@ export class ToyBuilder {
 			this.pos.push( _p.x, _p.y, _p.z );
 			if ( N && ! flat ) {
 
-				_n.set( N.getX( i ), N.getY( i ), N.getZ( i ) ).applyMatrix4( nm ).normalize();
+				// (a direction: the normal matrix without its translation row)
+				_n.set( N.getX( i ), N.getY( i ), N.getZ( i ) ).transformDirection( nm );
 				this.nrm.push( _n.x, _n.y, _n.z );
 
 			} else this.nrm.push( 0, 1, 0 );
@@ -117,34 +119,89 @@ export function toColor( c, target = new Color() ) {
 
 let _mats = null;
 
+// procedural surface detail in the object's own space (it rides along with moving toys)
+const detailModule = new ShaderModule( {
+	name: 'toyDetail',
+	code: /* wgsl */`
+fn toyHash3( p: vec3f ) -> f32 {
+	var q = fract( p * 0.1031 );
+	q += dot( q, q.zyx + 31.32 );
+	return fract( ( q.x + q.y ) * q.z );
+}
+fn toyNoise3( p: vec3f ) -> f32 {
+	let i = floor( p );
+	let f = fract( p );
+	let u = f * f * ( 3.0 - 2.0 * f );
+	return mix( mix( mix( toyHash3( i ), toyHash3( i + vec3f( 1.0, 0.0, 0.0 ) ), u.x ), mix( toyHash3( i + vec3f( 0.0, 1.0, 0.0 ) ), toyHash3( i + vec3f( 1.0, 1.0, 0.0 ) ), u.x ), u.y ),
+		mix( mix( toyHash3( i + vec3f( 0.0, 0.0, 1.0 ) ), toyHash3( i + vec3f( 1.0, 0.0, 1.0 ) ), u.x ), mix( toyHash3( i + vec3f( 0.0, 1.0, 1.0 ) ), toyHash3( i + vec3f( 1.0, 1.0, 1.0 ) ), u.x ), u.y ), u.z );
+}
+fn toyNoiseGrad( p: vec3f ) -> vec3f {
+	let e = 0.25;
+	let c = toyNoise3( p );
+	return vec3f( toyNoise3( p + vec3f( e, 0.0, 0.0 ) ) - c, toyNoise3( p + vec3f( 0.0, e, 0.0 ) ) - c, toyNoise3( p + vec3f( 0.0, 0.0, e ) ) - c ) / e;
+}
+`,
+} );
+const LOCAL = { varyings: { vLocal: 'vec3f' }, vertex: 'o.vLocal = v.position;', modules: [ detailModule ] };
+const NEAR = 'let near = 1.0 - smoothstep( 6.0, 70.0, length( in.P - frame.cameraPos ) );\n\tlet lp = in.vs.vLocal;';
+
 // shared materials (vertex colours)
 export function toyMaterials() {
 
 	if ( _mats ) return _mats;
 	_mats = {
-		// painted: satin with a clearcoat (balloons, hulls, signs)
+		// painted: glossy enamel under a clearcoat with a faint orange peel, a little smudged
 		paint: new Material( {
-			name: 'toy-paint', vertexColors: true, roughness: 0.5, metalness: 0,
+			name: 'toy-paint', vertexColors: true, roughness: 0.45, metalness: 0,
 			defines: { CLEARCOAT: 1 },
+			...LOCAL,
 			surface: /* wgsl */`
-	s.clearcoat = 0.25;
-	s.clearcoatRoughness = 0.3;
+	${ NEAR }
+	let smudge = toyNoise3( lp * 1.6 ) * 0.6 + toyNoise3( lp * 7.0 ) * 0.4;
+	s.roughness = clamp( s.roughness + ( smudge - 0.5 ) * 0.22, 0.18, 0.8 );
+	s.clearcoat = 0.35;
+	s.clearcoatRoughness = 0.1 + smudge * 0.12;
+	s.clearcoatNormal = normalize( s.normal + toyNoiseGrad( lp * 24.0 ) * 0.012 * near );
 `,
 		} ),
-		// fabric: balloon envelopes (satin nylon, a soft sheen at grazing angles)
+		// fabric: balloon envelopes (rip-stop nylon: a grid of heavier threads, a satin sheen)
 		fabric: new Material( {
 			name: 'toy-fabric', vertexColors: true, roughness: 0.62, metalness: 0,
 			defines: { SHEEN: 1 },
+			...LOCAL,
 			surface: /* wgsl */`
+	${ NEAR }
+	let r = length( lp.xz );
+	let u = atan2( lp.z, lp.x ) * max( r, 0.1 );
+	let gu = abs( fract( u / 0.34 ) - 0.5 );
+	let gv = abs( fract( lp.y / 0.34 ) - 0.5 );
+	let thread = smoothstep( 0.43, 0.48, max( gu, gv ) ) * near;
+	s.albedo *= 1.0 - thread * 0.14;
+	s.roughness = clamp( s.roughness + ( toyNoise3( lp * 50.0 ) - 0.5 ) * 0.12 * near + thread * 0.1, 0.3, 0.9 );
 	s.sheenColor = s.albedo * 0.5 + vec3f( 0.15 );
 	s.sheenRoughness = 0.45;
 	s.specularIntensity = 0.6;
 `,
 		} ),
-		// matte: wood, cloth, sand, rock
-		matte: new Material( { name: 'toy-matte', vertexColors: true, roughness: 0.85, metalness: 0 } ),
-		// metal trim
-		metal: new Material( { name: 'toy-metal', vertexColors: true, roughness: 0.3, metalness: 1 } ),
+		// matte: wood, cloth, sand, rock (a little mottled)
+		matte: new Material( {
+			name: 'toy-matte', vertexColors: true, roughness: 0.85, metalness: 0,
+			...LOCAL,
+			surface: /* wgsl */`
+	let lp = in.vs.vLocal;
+	s.albedo *= 0.9 + toyNoise3( lp * 3.5 ) * 0.14 + toyNoise3( lp * 17.0 ) * 0.06;
+`,
+		} ),
+		// metal trim: brushed, the streaks along the part
+		metal: new Material( {
+			name: 'toy-metal', vertexColors: true, roughness: 0.3, metalness: 1,
+			...LOCAL,
+			surface: /* wgsl */`
+	${ NEAR }
+	let brush = toyNoise3( vec3f( lp.x * 45.0, lp.y * 1.2, lp.z * 45.0 ) );
+	s.roughness = clamp( s.roughness + ( brush - 0.5 ) * 0.25 * ( 0.4 + near * 0.6 ), 0.12, 0.6 );
+`,
+		} ),
 		// lamps / glowing bits
 		glow: new Material( { name: 'toy-glow', vertexColors: true, lit: false, surface: 's.emissive = s.albedo * 6.0; s.albedo = vec3f( 0.0 );' } ),
 	};
